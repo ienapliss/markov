@@ -9966,7 +9966,7 @@ ma_prompt() {
 	while true; do
 		_prompt_draw_header
 		_prompt_draw_footer
-		IFS= read -E -r -p "${_MA_PROMPT_PREFIX:-}" line
+		IFS= read -e -r -p "${_MA_PROMPT_PREFIX:-}" line
 		[[ -n "$MA_USER_PROMPT" ]] && break
 		_prompt_discard_completion
 		local head_lines=${#MA_PROMPT_HEADER_LINES[@]}
