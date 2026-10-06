@@ -6681,14 +6681,18 @@ AWK
 	MA_TOOL_DISPLAY_OUTPUT[submit]=false 
 	MA_TOOL_DISPLAY_NAME[submit]=false 
 
+	_has_content() { local v=${1,,}; v=${v%.}; [[ -n $v && $v != none && $v != n/a ]]; }
 	_submit_build_result() { # 1:out_var(ref) 2:status 3:confidence 4:result 5:caveats 6:verification 7:files 8:thread_id
 		local -n _bfr_out=$1
 		local _bfr_status=$2 _bfr_conf=$3 _bfr_result=$4
 		local _bfr_caveats=$5 _bfr_verif=$6 _bfr_files=$7 _bfr_tid=$8
-		_bfr_out="Status: $_bfr_status (confidence $_bfr_conf%)"$'\n\n'"$_bfr_result"
-		[[ -n $_bfr_caveats ]] && _bfr_out+=$'\n'"Caveats: $_bfr_caveats"
-		[[ -n $_bfr_verif   ]] && _bfr_out+=$'\n'"Verification: $_bfr_verif"
-		[[ -n $_bfr_files   ]] && _bfr_out+=$'\n'"Files changes: $_bfr_files"
+		[[ $_bfr_status != complete* ]] || (( _bfr_conf < 100 )) && {
+			_bfr_out="Status: $_bfr_status (confidence $_bfr_conf%)"$'\n\n'
+		}
+		_bfr_out+="$_bfr_result"
+		_has_content "$_bfr_caveats" && _bfr_out+=$'\n'"Caveats: $_bfr_caveats"
+		_has_content "$_bfr_verif"   && _bfr_out+=$'\n'"Verification: $_bfr_verif"
+		_has_content "$_bfr_files"   && _bfr_out+=$'\n'"File changes: $_bfr_files"
 		if [[ ${MA_DELEGATE_USE_NOTES:-} != false && ${MA_DELEGATE_PERSISTENT_NOTES:-} != false ]]; then
 			local _bfr_notes="${_ma_notes_dir}/task-${_bfr_tid}.md"
 			[[ -s $_bfr_notes ]] && _bfr_out+=$'\n'"[Sub-agent internal task notes: $_bfr_notes]"
