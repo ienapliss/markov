@@ -548,7 +548,7 @@ Tools enabled by default:
               Lazy tools are excluded from the normal tool list and don't
               consume context or invalidate the cached prompt prefix
               Mark tools lazy with: MA_LAZY_TOOLS[tool_name]=1 in modules
-              Or from CLI options: --lazy-tools <comma-separated-list>
+              Or from CLI options: --lazy <comma-separated-list>
               Search limits output to 20 matches (MA_SEARCH_MAX_RESULTS:20)
   skills      Load skills
   websearch   Basic web search via web, wikipedia, arxiv, openalex, pubmed,
@@ -633,7 +633,7 @@ current thread. Its fields are:
 * `tools_json`: JSON string containing the tools sent with API requests
 * `persona`: name of the persona file
 * `thinking`: reasoning effort
-* `llm_opts`: model parameters as comma-separated `key=value` pairs
+* `llm_opts`: model parameters as space-separated `key=value` pairs
 * `max_tokens`: maximum completion tokens
 * `stream`: set to `false` when streaming is disabled
 * `system_prompt`: final system prompt assembled from context files
@@ -789,7 +789,8 @@ Configuration file options (overridden by CLI options):
                              WARNING: This mechanism is intended to
                              catch accidental misuse, not malicious input
                              You may add/modify patterns in:
-                             MA_PATTERNS_BASH and MA_PATTERNS_PROTECTED_PATHS
+                               MA_PATTERNS_BASH, MA_PATTERNS_PROTECTED_PATHS
+                               MA_PATTERNS_SECRETS
  MARKOV_CONFINE              Enable 'confinement' mode on the built-in tools
  MARKOV_STREAM               Set to false to disable streaming responses
  MARKOV_API_PROXY            Curl proxy server arguments for API requests
@@ -11699,7 +11700,7 @@ automatically and must be saved manually with /save"
 				break;
 			done
 			if _execute_submit "{}" "$cid" true; then
-				info " • Sub-task aborted\n";
+				info " • Sub-task aborted\n\n";
 			else
 				warn "Error returning from ${A_MARKOV}$old${A_WARN} thread.\n\n";
 			fi
