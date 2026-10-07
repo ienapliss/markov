@@ -2690,7 +2690,7 @@ _system_prompt_for_role() { # 1:role 2:tools 3:_out_sys_prompt(ref)
 		system_prompt="${MA_DEFAULT_SYSTEM_PROMPT}${role_msg_tools}"$'\n\n'"CWD: $MA_WORKING_DIR"
 	fi
 
-	[[ -n "${_role[append_system_prompt]:-}" ]] && system_prompt+="${_role[append_system_prompt]}"
+	[[ -n "${_role[append_system_prompt]:-}" ]] && system_prompt+=$'\n\n'"${_role[append_system_prompt]}"
 
 	local agents_files_content=
 	[[ ${_role[use_context_files]:-} != false ]] && agents_files_content=$MA_AGENTS_FILES_CONTENT
