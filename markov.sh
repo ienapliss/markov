@@ -4091,23 +4091,19 @@ _boot_init() {
 	MA_THREAD_JSON=${MA_THREAD_JSON:-}		# active thread messages
 	MA_THREAD_NAME=main						# active thread name
 	MA_MODEL_USAGE_LAST=
-
+	MA_ROLE_NAME=main
 	declare -gA MA_MODEL_USAGE=()
 	declare -gA MA_THREADS=()
 	meta_threads_pack main main
 	declare -gA MA_CTX_USAGE=( [main]= )
 	declare -gA MA_USER_THREADS=( [main]= )
-
 	declare -gA MA_TOOL
 	declare -gA MA_TOOLS_FAILURES=()
 	declare -gA MA_TOOLS_CALLS=()
 	declare -gA MA_APPROVED_CALLS
 	declare -gA MA_DISALLOW_CALLS
-
 	declare -gA MA_DELEGATED=()
-
 	declare -gA MA_EVALUATED
-
 	declare -gA MA_COMMAND_DESCR
 	declare -ga MA_LIST_LLM_PARAMS=(
 		temperature max_tokens top_p top_k min_p seed
@@ -5113,7 +5109,7 @@ AWK
 	{
 	  "type": "function",
 		"name": "websearch",
-		"description": "Returns a list of URLs and snippets. Imortant: Use the read tool to fetch and inspect a specific URL in more detail. Use query=front for fetching latest entries on news-sites",
+		"description": "Returns a list of URLs and snippets. Important: Use the read tool to fetch and inspect a specific URL in more detail. Use query=front for fetching latest entries on news-sites",
 		"parameters": {
 		  "type": "object",
 		  "properties": {
@@ -6700,7 +6696,6 @@ AWK
 		fi
 		return 0
 	}
-
 
 	_execute_submit() { # 1:sub_farg 2:sub_call_id 3:force_submission(bool)
 		local result status confidence files verification caveats
