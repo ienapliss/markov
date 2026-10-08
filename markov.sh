@@ -579,7 +579,8 @@ Extra tools:
   find        Find files
   ls          List directory contents
 
-Special reserved tools (should never be used manually):
+Special reserved tools (should not be used manually):
+  search     Used internally by the execute tool to search for lazy tools
   submit     Added automatically to every sub-thread to submit results
   feedback   Added automatically to evaluator threads to send verdict/steering
 ```
