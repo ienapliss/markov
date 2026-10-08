@@ -4609,23 +4609,18 @@ ma_builtin_tools() {
 	header_write() { jq -r '"\(.path // "") (\(.content|length) characters)"'  <<< "$1" 2>/dev/null ; }
 
 	execute_write() {
-		local path content
-		{
-			IFS= read -r -d '' path
-			IFS= read -r -d '' content
-		} < <(jq -jb '(.path // ""), "\u0000", (.content // ""), "\u0000"' <<< "$1") || { echo "ERROR: Failed to parse path or content" >&2; return 1; }
-
+		local path
+		path=$(jq -jb '.path // ""' <<< "$1") || { echo "ERROR: Failed to parse path" >&2; return 1; }
+		[[ -n "$path" ]] || { echo "ERROR: Missing path" >&2; return 1; }
 		if [[ "${MA_CONFINE:-}" == true ]] && is_path_out_of_confinement "$path"; then
 			err "DENIED: confinement in working directory is enabled.\n"
 			echo "DENIED: path '$path' is outside the working directory ($MA_WORKING_DIR)"; 
 			return 1;
 		fi
-
 		local dir="${path%/*}"; [[ "$dir" == "$path" ]] && dir="."
-		mkdir -p "$dir"	|| { echo "ERROR: Failed to create directory" >&2; return 1; }
-		if ! printf '%s' "$content" > "$path"; then	 echo "ERROR: Failed to write $path" >&2; return 1; fi
-		local bytes="$(wc -c < "$path")" || { echo "ERROR: Failed to stat written file" >&2; return 1; }
-		echo "OK: Written $bytes bytes to $path"
+		mkdir -p "$dir" || { echo "ERROR: Failed to create directory" >&2; return 1; }
+		jq -jb '.content // ""' <<< "$1" > "$path" || { echo "ERROR: Failed to write $path" >&2; return 1; }
+		echo "OK: Written $(wc -c < "$path") bytes to $path"
 	}
 
 
