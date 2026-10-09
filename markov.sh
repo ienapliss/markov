@@ -6542,7 +6542,7 @@ AWK
 
 		local final_prop=
 		[[ ${MA_DELEGATE_USE_SMART_RETURN:-} != false ]] && {
-		   	final_prop='"final": { "type": "boolean", "description": "Return result directly to the user. Set to true when there is no need to invoke you after the task completes successfully" },'
+		   	final_prop='"final": { "type": "boolean", "description": "Return the result directly to the user if this is the only task to be performed. Set to true ONLY if no further invocation is needed after the task completes successfully" },'
 		}
 
 		MA_TOOL["delegate"]='
@@ -6794,7 +6794,11 @@ AWK
 				[[ ${MA_DELEGATE_USE_NOTES:-} != false && ${MA_DELEGATE_PERSISTENT_NOTES:-} == false ]] && {
 					rm -f "${_ma_notes_dir}/task-${_thread_id}.md"
 				}
-				info " • Returned to ${A_MARKOV}$MA_THREAD_NAME${A_INFO} from ${A_MARKOV}$sub_thread_name${A_INFO} thread.\n\n";
+				if [[ ${_MA_SMART_RETURN:-} == true ]]; then
+					info " • Returned to ${A_MARKOV}$MA_THREAD_NAME${A_INFO}: Task finished.\n\n";
+				else
+					info " • Returned to ${A_MARKOV}$MA_THREAD_NAME${A_INFO}.\n\n";
+				fi
 				return 0
 			}
 			return 1
@@ -8981,7 +8985,6 @@ ma_agent_run() { # 1:max_iterations
 
 		[[ "${_INTERRUPTED:-}" == true || ${_MA_SMART_RETURN:-} == true || ${_MA_IS_PAUSING:-} == true ]] && {
 			[[ ${_MA_IS_PAUSING:-} == true ]] && info " • Paused. Use ${A_B}/continue${A_INFO} to resume normally.\n";
-			[[ ${_MA_SMART_RETURN:-} == true ]] && info " • Task finsihed.\n";
 		   	rc=0; unset _MA_SMART_RETURN; unset _MA_IS_PAUSING;
 			break; 
 		}
