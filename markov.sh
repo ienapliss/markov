@@ -8061,8 +8061,6 @@ _api_call_stream() {
 			-X POST "${MA_ENDPOINT_OBJ["api_url"]}" -H "Content-Type: application/json" "${_h_auth[@]}" --data-binary @- 2>/dev/null
 	)
 
-	local _ma_streamproc_pid=$!
-	kill "$_ma_streamproc_pid" 2>/dev/null;
 	ma_spinner_stop
 
 	_process_reasoning_batch; _process_content_batch
