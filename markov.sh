@@ -9098,9 +9098,6 @@ ma_agent_run() { # 1:max_iterations
 
 
 
-
-
-
 _ma_trunc_keep_tail() {
     local str="$1" width="$2"
     local -n out=$3
@@ -9219,9 +9216,6 @@ _footerline_stats() {
     printf -v _MA_STATUSLINE_STATS '%s%*s%s' "$left" "$pad" '' "$right"
 }
 
-
-
-
 _draw_separator_var() { # 1:out_var(ref) 2:align(left|center|right) 3:char 4:color 5:text 6:text_color 7:columns
 	local -n _dsv_out=$1
 	local _dsv_align=${2:-right} _dsv_char=$3 _dsv_color=${4:-} _dsv_text=${5:-}
@@ -9313,14 +9307,20 @@ ma_custom_prompt_load() { # $1:_cpl_text_out(ref) $2:cmd_name $3:cmd_args
 		local prompt_file="${MA_CUSTOM_PROMPTS[$cmd_name]}"
 		[[ -f $prompt_file ]] && {
 			_cpl_text_out="$(<"$prompt_file")";
-			[[ -n $cmd_args ]] && {
-				eval "set -- $cmd_args"
-				local i=1
-				while [[ $_cpl_text_out == *"\$$i"* ]]; do
-					_cpl_text_out="${_cpl_text_out//\$$i/${!i:-}}"
-					((i++))
-				done
-			}
+			local _cpl_rest=$cmd_args
+			local _cpl_re="^[[:space:]]*(\"([^\"]*)\"|'([^']*)'|([^[:space:]]+))"
+			local i=1
+			while [[ $_cpl_text_out == *"\$$i"* ]]; do
+				if [[ $_cpl_rest =~ $_cpl_re ]]; then
+					_cpl_text_out="${_cpl_text_out//\$$i/"${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[4]}"}"
+					_cpl_rest=${_cpl_rest:${#BASH_REMATCH[0]}}
+				else
+					_cpl_text_out="${_cpl_text_out//\$$i/}"
+				fi
+				((i++))
+			done
+			_cpl_rest=${_cpl_rest#"${_cpl_rest%%[![:space:]]*}"}
+			_cpl_text_out="${_cpl_text_out//'$@'/"$_cpl_rest"}"
 			return 0
 		}
 	}
