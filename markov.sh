@@ -7820,7 +7820,8 @@ _api_call_stream() {
 				[[ $_reasoning_status -lt 2 ]] && { ma_spinner_stop; _reasoning_status=2; }
 				[[ "$stop_reason" == "tool_use" ]] && _tools_seen=false ;;
 
-			message_stop)  #|ping
+			message_stop)
+				_stream_done=true
 				printf '\n' >&2
 				;;
 		esac
@@ -7960,6 +7961,7 @@ _api_call_stream() {
 
 				printf "${A_R}\n"
 				[[ "$payload" == *'"usage"'* ]] && { _api_parse_usage payload "$api_type"; }
+				_stream_done=true
 				;;
 
 			# response.created|response.in_progress|\
@@ -7975,7 +7977,7 @@ _api_call_stream() {
 
 	ma_spinner_start
 
-	local _reasoning_status=0 _tools_status=0 _content_status=0 _tools_seen=false
+	local _reasoning_status=0 _tools_status=0 _content_status=0 _tools_seen=false _stream_done=false
 
 	while IFS= read -r line || [[ -n "$line" ]]; do
 		[[ "$_INTERRUPTED" == "true" ]] && break
@@ -7989,7 +7991,9 @@ _api_call_stream() {
 			continue
 		fi
 		payload="${line#data: }"
-		[[ "$payload" == "[DONE]" || -z "$payload" ]] && continue
+
+		[[ "$payload" == "[DONE]" ]] && { _stream_done=true; break; }
+		[[ -z "$payload" ]] && continue
 
 		ma_now _now_us
 
@@ -8045,7 +8049,6 @@ _api_call_stream() {
 				esac
 				[[ "${line}" == *'"usage"'* ]] && { _api_parse_usage payload "$api_type"; }
 				;;
-
 			openai_resp)
 				_process_openai_resp_event
 				;;
@@ -8056,10 +8059,13 @@ _api_call_stream() {
 				;;
 		esac
 
+		$_stream_done && break
 	done < <(
 		printf '%s' "$body" | curl ${MA_ENDPOINT_OBJ["api_proxy"]} "${MA_USER_AGENT_ARRAY[@]}" -sS -N --tcp-nodelay -w '\nHTTP_STATUS:%{http_code}\n' \
 			-X POST "${MA_ENDPOINT_OBJ["api_url"]}" -H "Content-Type: application/json" "${_h_auth[@]}" --data-binary @- 2>/dev/null
 	)
+
+	$_stream_done && [[ -z "$http_code" ]] && http_code=200
 
 	ma_spinner_stop
 
