@@ -4111,12 +4111,10 @@ _boot_init() {
 		presence_penalty repetition_penalty frequency_penalty
 		reset
 	)
-
 	declare -gA MA_ROLE_TOOLS_main=()
 	declare -gn MA_ROLE_TOOLS=MA_ROLE_TOOLS_main
 	declare -gA MA_ROLE_LAZY_TOOLS_main
 	declare -gn MA_LAZY_TOOLS=MA_ROLE_LAZY_TOOLS_main
-
 	declare -ga MA_BASH_ENV_PREFIX
 	declare -gA MA_TOOL_DISPLAY_OUTPUT
 	declare -gA MA_TOOL_DISPLAY_NAME
@@ -4131,7 +4129,7 @@ _boot_init() {
 	declare -gir idx_err_body=5
 	_MA_SHOULD_PRINT=0
 	[[ "${MA_ONE_SHOT_MODE:-}" != true || "${MA_PRINT_ALL:-}" == true ]] && _MA_SHOULD_PRINT=1
-
+	MA_CURL_EXTRA_ARGS=()
 }
 
 ma_bootup() {
@@ -4587,7 +4585,6 @@ ma_builtin_tools() {
 
 	}
 	MA_TOOL_DISPLAY_OUTPUT[read]=false 
-
 
 
 
@@ -7388,7 +7385,7 @@ _api_call() { # non-streaming
 	_curl_cmd_blocking(){
 		local _h_auth=(); _api_set_call_header _h_auth "$api_type" "$api_key"
 		# shellcheck disable=SC2086
-		printf '%s' "$body" | curl ${MA_ENDPOINT_OBJ["api_proxy"]} "${MA_USER_AGENT_ARRAY[@]}" -H 'Accept: application/json' --keepalive-time 60 -sS -w "${sep}%{http_code}" \
+		printf '%s' "$body" | curl ${MA_ENDPOINT_OBJ["api_proxy"]} "${MA_USER_AGENT_ARRAY[@]}" "${MA_CURL_EXTRA_ARGS[@]}" -H 'Accept: application/json' --keepalive-time 60 -sS -w "${sep}%{http_code}" \
 			  -X POST "${MA_ENDPOINT_OBJ["api_url"]}" -H 'Content-Type: application/json' "${_h_auth[@]}" --data-binary @- 2>/dev/null
 	}
 	_curl_out(){ trap '' INT; _curl_cmd_blocking; }
@@ -8065,7 +8062,7 @@ _api_call_stream() {
 
 		$_stream_done && break
 	done < <(
-		printf '%s' "$body" | curl ${MA_ENDPOINT_OBJ["api_proxy"]} "${MA_USER_AGENT_ARRAY[@]}" -sS -N --tcp-nodelay -w '\nHTTP_STATUS:%{http_code}\n' \
+		printf '%s' "$body" | curl ${MA_ENDPOINT_OBJ["api_proxy"]} "${MA_USER_AGENT_ARRAY[@]}" "${MA_CURL_EXTRA_ARGS[@]}" -sS -N --tcp-nodelay -w '\nHTTP_STATUS:%{http_code}\n' \
 			-X POST "${MA_ENDPOINT_OBJ["api_url"]}" -H "Content-Type: application/json" "${_h_auth[@]}" --data-binary @- 2>/dev/null
 	)
 
