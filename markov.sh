@@ -7980,6 +7980,11 @@ _api_call_stream() {
 
 	local _reasoning_status=0 _tools_status=0 _content_status=0 _tools_seen=false _stream_done=false
 
+	local _re_content='"content":[[:space:]]*"[^"]'
+	local _re_reason='"(reasoning_content|reasoning|thinking)":[[:space:]]*"[^"]'
+	local _re_tools='"(tool_calls|toolCalls)":[[:space:]]*\[[[:space:]]*\{|"function_call":[[:space:]]*\{'
+	local _re_usage='"usage":[[:space:]]*\{'
+
 	while IFS= read -r line || [[ -n "$line" ]]; do
 		[[ "$_INTERRUPTED" == "true" ]] && break
 
@@ -7998,58 +8003,46 @@ _api_call_stream() {
 
 		ma_now _now_us
 
+
 		case "$api_type" in
 			openai_chat)
-				case "$payload" in
-					(*'"tool_calls"'*|*'"toolCalls"'*|*'"function_call"'*)
-						[[ $_tools_status -ne 1 ]] && {
-							_tools_status=1
-							(( start_time == 0 )) && start_time=$_now_us
-							ma_spinner_stop;
-							[[ $_content_status -eq 1 ]] && { _process_content_batch; _content_status=2; }
-							[[ $_reasoning_status -eq 1 ]] && { _close_reasoning; _reasoning_status=2; }
-						}
-						_batch_tools+=("$payload")
-						(( ${#_batch_tools[@]} >= _MAX_BATCH || _now_us - _tools_last_batch_us >= _BATCH_MAX_MICROSEC )) && _process_tools_batch
-						;;
-					(*'"content":'*)
-						[[ "$payload" != *'"content":null'* && "$payload" != *'"content":""'* ]] && {
-							[[ $_content_status -ne 1 ]] && {
-								_content_status=1;
-
-								(( start_time == 0 )) && start_time=$_now_us
-								ma_spinner_stop;
-								[[ $_reasoning_status -eq 1 ]] && { _close_reasoning; _reasoning_status=2; }
-								[[ $_tools_status -eq 1 ]] && { _process_tools_batch; _tools_status=2; }
-							}
-
-							_batch_content+=("$payload")
-							(( ${#_batch_content[@]} >= _MAX_BATCH || _now_us - _content_last_batch_us >= _BATCH_MAX_MICROSEC )) \
-								&& _process_content_batch
-						}
-						;;
-					(*'"reasoning_content"'*|*'"thinking"'*|*'"reasoning":'*)
-						[[ "$payload" != *'"reasoning":null'* && "$payload" != *'"reasoning":""'* ]] && {
-
-							[[ $_content_status -eq 1 ]] && { _process_content_batch; _content_status=2; }
-
-							[[ $_reasoning_status -ne 1 ]] && {
-								_reasoning_status=1
-								(( start_time == 0 )) && start_time=$_now_us
-								ma_spinner_stop
-								[[ ${MA_HIDE_THINKING:-} != false ]] && ma_spinner_start "thinking…" think
-								[[ $_tools_status -eq 1 ]] && { _process_tools_batch; _tools_status=2; }
-							}
-
-							_batch_reasoning+=("$payload")
-							(( ${#_batch_reasoning[@]} >= _MAX_BATCH || _now_us - _reasoning_last_batch_us >= _BATCH_MAX_MICROSEC )) && {
-								_process_reasoning_batch;
-							}
-						}
-						;;
-				esac
-				[[ "${line}" == *'"usage"'* ]] && { _api_parse_usage payload "$api_type"; }
+				[[ $payload =~ $_re_tools ]] && {
+					(( _tools_status != 1 )) && {
+						_tools_status=1
+						(( start_time == 0 )) && start_time=$_now_us
+						ma_spinner_stop
+						[[ $_content_status -eq 1 ]] && { _process_content_batch; _content_status=2; }
+						[[ $_reasoning_status -eq 1 ]] && { _close_reasoning; _reasoning_status=2; }
+					}
+					_batch_tools+=("$payload")
+					(( ${#_batch_tools[@]} >= _MAX_BATCH || _now_us - _tools_last_batch_us >= _BATCH_MAX_MICROSEC )) && _process_tools_batch
+				}
+				[[ $payload =~ $_re_reason ]] && {
+					[[ $_content_status -eq 1 ]] && { _process_content_batch; _content_status=2; }
+					(( _reasoning_status != 1 )) && {
+						_reasoning_status=1
+						(( start_time == 0 )) && start_time=$_now_us
+						ma_spinner_stop
+						[[ ${MA_HIDE_THINKING:-} != false ]] && ma_spinner_start "thinking…" think
+						[[ $_tools_status -eq 1 ]] && { _process_tools_batch; _tools_status=2; }
+					}
+					_batch_reasoning+=("$payload")
+					(( ${#_batch_reasoning[@]} >= _MAX_BATCH || _now_us - _reasoning_last_batch_us >= _BATCH_MAX_MICROSEC )) && _process_reasoning_batch
+				}
+				[[ $payload =~ $_re_content ]] && {
+					(( _content_status != 1 )) && {
+						_content_status=1
+						(( start_time == 0 )) && start_time=$_now_us
+						ma_spinner_stop
+						[[ $_reasoning_status -eq 1 ]] && { _close_reasoning; _reasoning_status=2; }
+						[[ $_tools_status -eq 1 ]] && { _process_tools_batch; _tools_status=2; }
+					}
+					_batch_content+=("$payload")
+					(( ${#_batch_content[@]} >= _MAX_BATCH || _now_us - _content_last_batch_us >= _BATCH_MAX_MICROSEC )) && _process_content_batch
+				}
+				[[ $payload =~ $_re_usage ]] && _api_parse_usage payload "$api_type"
 				;;
+
 			openai_resp)
 				_process_openai_resp_event
 				;;
