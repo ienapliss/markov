@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: MIT
 # ============================================================================
 
-MA_VERSION="0.1.0"
+MA_VERSION="0.2.0"
 
 set -o pipefail
 [[ -v MA_DEVELOP ]] && set -u
@@ -967,6 +967,7 @@ HTTP server fields:
 * `api_key`: (Optional) authentication key or token
 * `auth_header`: (Optional) header format; `%s` is replaced with
   `api_key`. Defaults to `Authorization: Bearer %s`
+* `extra_args`: (Optional) more arguments passed to curl
 
 Some server may use `[auth_header]='x-api-key: %s'` for authentication.
 
