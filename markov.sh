@@ -103,6 +103,7 @@ Options:
                            like custom SYSTEM.md and AGENTS.md files
   --modules <list>         Comma-separated list of modules to use
   --no-modules             Disable all modules
+  --no-mcp                 Disable all configured mcp servers
   --no-prompts             Disable searching for prompt template files
   --persona <name>         Load persona by name from local or global config
   --llm-opts <list>        Specify LLM parameters.
@@ -271,6 +272,8 @@ not work as intended.
 * Built-in tools enabled by default: `read`, `write`, `edit`, `bash`, 
   `skills`, `execute`, `websearch`, `delegate`
 * Additional tools: `symbols`, `reload`, `docs`, `ask`, `grep`, `find`, `ls`
+* Basic **MCP support**: over *Streamable HTTP* and *local stdio*,
+  OAuth-only servers not supported
 * **Built-in tool call analyzer**: use a trusted LLM to analyze tool calls
 * **Inter-process communication** for sending and queueing messages from
   external scripts/processes
@@ -774,6 +777,7 @@ Configuration file options (overridden by CLI options):
  MARKOV_TRUST_DIR            Trust the current directory
  MARKOV_USE_TOOLS            Set to false to disable tool usage
  MARKOV_USE_MODULES          Set to false to disable modules
+ MARKOV_USE_MCP              Set to false to disable MCP servers
  MARKOV_USE_PROMPTS          Set to false to disable prompt templates
  MARKOV_USE_SKILLS           Set to false to disable skills
  MARKOV_USE_CONTEXT_FILES    Set to false to disable context files
@@ -931,6 +935,52 @@ Set the `evaluator` field of a delegate role to `task_evaluator` to use it.
 
 This role is configured automatically by `Markov`, but you may replace its
 system prompt to better adapt it to your sub-tasks.
+
+
+#### MCP
+
+Supports MCP over **Streamable HTTP** and **local stdio**.
+OAuth-only servers are not supported.
+Server requests are ignored: client advertises no capabilities.
+
+Configure each server in a global associative array named `mcp_*`.
+Tool names use the server name without the `mcp_` prefix to avoid
+collisions (e.g. `mcp_github` tools use the `github_` prefix).
+
+Server examples:
+
+```bash
+declare -gA mcp_github=(
+  [api_url]='https://example.com/mcp'
+  [api_key]="$GITHUB_TOKEN"
+)
+
+declare -gA mcp_files=(
+  [command]='npx -y @modelcontextprotocol/server-filesystem /home/me/project'
+  [env]='FOO=bar TOKEN=abc'
+)
+```
+
+HTTP server fields:
+
+* `api_url`: MCP server URL
+* `api_key`: (Optional) authentication key or token
+* `auth_header`: (Optional) header format; `%s` is replaced with
+  `api_key`. Defaults to `Authorization: Bearer %s`
+
+Some server may use `[auth_header]='x-api-key: %s'` for authentication.
+
+Local (stdio) server fields:
+* `command`: Command used to launch the server
+* `env`: (Optional) space-separated `VAR=value` prefixes
+* `cwd`: (Optional) working directory
+
+Tools are automatically marked as `lazy`. Use `[lazy]=false` to load them
+normally.
+
+`MA_MCP_TIMEOUT` sets the timeout for initialization and responses
+in seconds (default: `120`).
+
 
 #### System prompt
 
@@ -1566,6 +1616,8 @@ while [[ $# -gt 0 ]]; do
 		-a|--trust-dir)  MA_TRUST_DIR=true;      shift ;;
 		--no-config)	 MA_USE_CONFIG=false; shift ;;
 		--no-modules)    MA_USE_MODULES=false;     shift ;;
+		--no-mcp)		 MA_USE_MCP=false;     shift ;;
+
 		--no-tools)      MA_USE_TOOLS=false;   shift ;;
 		--no-prompts)    MA_USE_PROMPTS=false;     shift ;;
 		--no-context-files)	 MA_USE_CONTEXT_FILES=false; shift ;;
@@ -1708,6 +1760,7 @@ ma_source_config() {
 	MA_TRUST_DIR="${MA_TRUST_DIR:-${MARKOV_TRUST_DIR:-}}"
 	MA_USE_CONTEXT_FILES="${MA_USE_CONTEXT_FILES:-${MARKOV_USE_CONTEXT_FILES:-}}"
 	MA_USE_MODULES="${MA_USE_MODULES:-${MARKOV_USE_MODULES:-}}"
+	MA_USE_MCP="${MA_USE_MCP:-${MARKOV_USE_MCP:-}}"
 	MA_USE_TOOLS="${MA_USE_TOOLS:-${MARKOV_USE_TOOLS:-}}"
 	MA_USE_PROMPTS="${MA_USE_PROMPTS:-${MARKOV_USE_PROMPTS:-}}"
 	MA_USE_SKILLS="${MA_USE_SKILLS:-${MARKOV_USE_SKILLS:-}}"
@@ -2447,9 +2500,10 @@ Update the notes whenever important state changes occur.
 	return $_th_obj_ret_code
 }
 
-ma_source_modules(){
+ma_load_modules_and_mcps(){
 	declare -gA MA_MODULES_LOADED=()
 	local t
+
 	[[ -v _MA_INITIALIZED ]] || {
 		declare -gA _builtin_tools_map=();
 		for t in "${!MA_TOOL[@]}"; do _builtin_tools_map["$t"]=1; done
@@ -2517,27 +2571,32 @@ ma_source_modules(){
 			done
 		done
 
-		declare -ga _modules_tool_names=()
-		[[ "${MA_USE_TOOLS:-}" != false ]] && { # module tool validation
-			local -a names=() jsons=() valid=()
-			for t in "${!MA_TOOL[@]}"; do
-				[[ -v '_builtin_tools_map["$t"]' ]] && continue
-				names+=("$t")
-				jsons+=("${MA_TOOL[$t]}")
-			done
-			(( ${#jsons[@]} > 0 )) && {
-				mapfile -t valid < <(printf '%s\0' "${jsons[@]}" | jq -bR -s -c '
-					split("\u0000") | .[:-1] | map(try (fromjson | true) catch false) | .[]
-				')
-				local i
-				for i in "${!names[@]}"; do
-					[[ "${valid[$i]:-false}" != "true" ]] && { warn "Invalid JSON: ${names[$i]}\n"; continue; }
-					_modules_tool_names+=("${names[$i]}")
-				done
-			}
-		}
-
 	}
+
+	[[ "${MA_USE_MCP:-true}" != false ]] && { mcp_cleanup; mcp_load; }
+
+	declare -ga _modules_tool_names=()
+	[[ "${MA_USE_TOOLS:-}" != false ]] && {
+
+
+		local -a names=() jsons=() valid=()
+		for t in "${!MA_TOOL[@]}"; do
+			[[ -v '_builtin_tools_map["$t"]' ]] && continue
+			names+=("$t")
+			jsons+=("${MA_TOOL[$t]}")
+		done
+		(( ${#jsons[@]} > 0 )) && {
+			mapfile -t valid < <(printf '%s\0' "${jsons[@]}" | jq -bR -s -c '
+				split("\u0000") | .[:-1] | map(try (fromjson | true) catch false) | .[]
+			')
+			local i
+			for i in "${!names[@]}"; do
+				[[ "${valid[$i]:-false}" != "true" ]] && { warn "Invalid JSON: ${names[$i]}\n"; continue; }
+				_modules_tool_names+=("${names[$i]}")
+			done
+		}
+	}
+
 }
 
 _persona_load() {
@@ -2713,7 +2772,7 @@ ma_reload() {
 	declare -gn MA_LAZY_TOOLS=MA_ROLE_LAZY_TOOLS_main
 	ma_builtin_tools
 	ma_builtin_commands
-	ma_source_modules
+	ma_load_modules_and_mcps
 
 	[[ ${MA_USE_SKILLS:-} != false ]] && {
 		local _pc
@@ -2878,7 +2937,7 @@ _context_info_print(){
 	local IFS=' '
 	[[ ${#_ma_ctx_files[@]} -gt 0 ]] && { printf "${A_D}${A_B}Context:\n ${A_R}${A_D}%s\n${A_R}" "${_ma_ctx_files[*]}" >&2;  }
 	[[ ${#MA_MODULES_LOADED[@]} -gt 0 ]] && { printf "${A_D}${A_B}Modules:\n ${A_R}${A_D}%s\n${A_R}" "${!MA_MODULES_LOADED[*]}" >&2; }
-
+	[[ ${#MA_MCP_SERVERS[@]} -gt 0 ]] && { printf "${A_D}${A_B}MCPs:\n ${A_R}${A_D}%s\n${A_R}" "${!MA_MCP_SERVERS[*]}" >&2; }
 	_print_keys() {
 		local -n map=$1
 		local key
@@ -4134,6 +4193,7 @@ _boot_init() {
 
 ma_bootup() {
 	_boot_init
+
 
 	if command -v setsid >/dev/null; then
 		_MA_SETSID=(setsid)
@@ -11891,6 +11951,323 @@ ma_repl() {
 
 
 
+_mcp_stdio_spawn() { # $1:server $2:command_line $3:env $4:cwd
+	local srv=$1 cmd=$2 envp=${3:-} cwd=${4:-}
+	local name="MCPP_${srv//[^A-Za-z0-9_]/_}" log="$_ma_tmp_dir/ma-mcp-$$-${srv//[^A-Za-z0-9_]/_}.log"
+	: > "$log" || { err "MCP '$srv': cannot write $log\n"; return 1; }
+	eval "coproc $name { ${cwd:+cd \"\$cwd\" || exit 1; }${envp:+$envp }exec $cmd 2>>\"\$log\"; }" 2>/dev/null
+	local -n _arr=$name _pid=${name}_PID
+	[[ -z ${_pid:-} ]] && { warn "MCP '$srv': failed to start: $cmd\n"; return 1; }
+	MA_MCP_RFD[$srv]=${_arr[0]}; MA_MCP_WFD[$srv]=${_arr[1]}
+	MA_MCP_PID[$srv]=$_pid;      MA_MCP_LOG[$srv]=$log
+	return 0
+}
+
+_mcp_stdio_post() { # $1:server $2:json_body $3:request_id ('' for notifications)
+	local srv=$1 body=${2//$'\n'/ } want=${3:-} line=''
+	local wfd=${MA_MCP_WFD[$srv]} rfd=${MA_MCP_RFD[$srv]} pid=${MA_MCP_PID[$srv]}
+	_MCP_CODE=0; _MCP_BODY=''; _MCP_SSE=false; _MCP_ERR=''
+	if ! kill -0 "$pid" 2>/dev/null; then
+		_MCP_ERR="MCP server '$srv' is not running (stderr log: ${MA_MCP_LOG[$srv]})"; return 1
+	fi
+	[[ $BASHPID != "$$" ]] && trap '' PIPE
+	while IFS= read -r -t 0 -u "$rfd"; do IFS= read -r -t 1 -u "$rfd" line || break; done
+	if ! printf '%s\n' "$body" >&"$wfd"; then
+		_MCP_ERR="write to MCP server '$srv' failed (stderr log: ${MA_MCP_LOG[$srv]})"; return 1
+	fi
+	[[ -n $want ]] || return 0
+	_mcp_stdio_read "$srv" "$want"
+}
+
+_mcp_stdio_read() { # $1:server $2:request id
+	local srv=$1 want=$2 line='' rc=0 to=${MA_MCP_TIMEOUT:-120}
+	local rfd=${MA_MCP_RFD[$srv]}
+	local re='"id"[[:space:]]*:[[:space:]]*'$want'([^0-9]|$)'
+	while :; do
+		IFS= read -r -t "$to" -u "$rfd" line; rc=$?
+		(( rc )) && {
+			if (( rc > 128 )); then
+				_MCP_ERR="timeout after ${to}s waiting for MCP server '$srv'"
+			else
+				_MCP_ERR="MCP server '$srv' closed its output (stderr log: ${MA_MCP_LOG[$srv]})";
+			fi
+			return 1
+		}
+		[[ $line =~ $re ]] || continue
+		[[ $line == *'"result"'* || $line == *'"error"'* ]] || continue
+		_MCP_BODY=${line%$'\r'}; _MCP_CODE=200
+		return 0
+	done
+}
+
+_mcp_stdio_stop() { # $1:server
+	local srv=$1 pid='' wfd='' rfd='' junk=''
+	[[ -n ${MA_MCP_PID[$srv]:-} ]] || return 0
+	pid=${MA_MCP_PID[$srv]}; wfd=${MA_MCP_WFD[$srv]}; rfd=${MA_MCP_RFD[$srv]}
+	if kill -0 "$pid" 2>/dev/null; then
+		exec {wfd}>&-
+		while IFS= read -r -t 2 -u "$rfd" junk; do :; done
+		if kill -0 "$pid" 2>/dev/null; then kill "$pid" 2>/dev/null; fi
+		exec {rfd}<&-
+	fi
+	unset 'MA_MCP_PID[$srv]' 'MA_MCP_WFD[$srv]' 'MA_MCP_RFD[$srv]'
+	return 0
+}
+
+_mcp_post() { # $1:server  $2:json_body  $3:request_id ('' for notifications)
+	[[ -n ${MA_MCP_WFD[${1:-}]:-} ]] && { _mcp_stdio_post "$@"; return; }
+
+	local srv=$1 raw='' hdr='' rc=0
+	local -a h=()
+	[[ -n ${MA_MCP_VER[$srv]:-} ]]     && h+=( -H "MCP-Protocol-Version: ${MA_MCP_VER[$srv]}" )
+	[[ -n ${MA_MCP_SESSION[$srv]:-} ]] && h+=( -H "Mcp-Session-Id: ${MA_MCP_SESSION[$srv]}" )
+	_MCP_CODE=0; _MCP_BODY=''; _MCP_SSE=false; _MCP_ERR=''
+
+	raw=$( curl -K "${MA_MCP_CFG[$srv]}" "${h[@]}" ${MA_MCP_CURL_EXTRA_ARGS[$srv]:-} --data-binary @- <<< "$2" )
+	rc=$?
+	(( rc )) && { _MCP_ERR="curl failed (exit $rc) talking to MCP server '$srv'"; return 1; }
+
+	raw+=$'\r\n\r\n'
+	while [[ $raw == HTTP/* ]]; do  # skip any 1xx blocks (100-continue)
+		hdr=${raw%%$'\r\n\r\n'*}
+		raw=${raw#*$'\r\n\r\n'}
+		[[ $hdr =~ $_MCP_RE_STATUS ]] && _MCP_CODE=${BASH_REMATCH[1]}
+		(( _MCP_CODE >= 200 )) && break
+	done
+
+	shopt -s nocasematch
+	[[ $hdr =~ $_MCP_RE_SID ]] && MA_MCP_SESSION[$srv]=${BASH_REMATCH[1]}
+	[[ $hdr =~ $_MCP_RE_SSE ]] && _MCP_SSE=true
+	shopt -u nocasematch
+
+	(( _MCP_CODE < 200 || _MCP_CODE >= 300 )) && {
+		_MCP_ERR="HTTP $_MCP_CODE from MCP server '$srv': ${raw%%$'\r'*}"
+		return 1
+	}
+	_MCP_BODY=$raw
+	return 0
+}
+
+_mcp_request() { # $1:server $2:body $3:request id $4:out var $5:jq program  [$6..: extra jq args]
+	local srv=$1 body=$2 id=$3 ov=$4 prog=$5; shift 5
+	if ! _mcp_post "$srv" "$body" "$id"; then
+		printf -v "$ov" 'E\x1fERROR: %s' "$_MCP_ERR"
+		return 1
+	fi
+	local -n _res=$ov
+	while :; do
+		_res=$(jq -Rnjb --argjson id "$id" --argjson sse "$_MCP_SSE" "$@" "$prog" <<< "$_MCP_BODY")
+		[[ ${_res:-} == N* && -n ${MA_MCP_WFD[$srv]:-} ]] || break
+		if ! _mcp_stdio_read "$srv" "$id"; then printf -v "$ov" 'E\x1fERROR: %s' "$_MCP_ERR"; return 1; fi
+	done
+	return 0
+}
+
+_mcp_server_init() { # $1:server
+	local srv=$1 out=''
+	MA_MCP_SESSION[$srv]=''; MA_MCP_VER[$srv]=''
+	_mcp_request "$srv" \
+		'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"'"$MA_MCP_DEFAULT_VER"'","capabilities":{},"clientInfo":{"name":"ma-harness","version":"0.1"}}}' \
+		1 out "$_MCP_Q_INIT"
+	[[ $out == O* ]] || { out=${out#?$'\x1f'}; warn "MCP '$srv': ${out:-init failed}\n"; return 1; }
+	MA_MCP_VER[$srv]=${out#?$'\x1f'}
+	[[ -n ${MA_MCP_VER[$srv]} ]] || MA_MCP_VER[$srv]=$MA_MCP_DEFAULT_VER
+	_mcp_post "$srv" '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+}
+
+_mcp_jescape() { # 1:string 2:escaped_string
+	local -n _jo=$2
+	_jo=${1//\\/\\\\}; _jo=${_jo//\"/\\\"}
+	_jo=${_jo//$'\n'/\\n}; _jo=${_jo//$'\r'/\\r}; _jo=${_jo//$'\t'/\\t}
+}
+_mcp_header() { local a=${1:-}; a=${a//$'\n'/ }; printf '%s\n' "${a:0:160}"; }
+
+_mcp_register_tools() { # $1:server  $2:lazy (true|false)
+	local srv=$1 lazy=${2:-true} cursor='' ec='' out='' rec='' safe='' orig='' json='' body=''
+	while :; do
+		_mcp_jescape "$cursor" ec
+		if [[ -n $cursor ]]; then
+			body='{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"cursor":"'"$ec"'"}}'
+		else
+			body='{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+		fi
+		_mcp_request "$srv" "$body" 2 out "$_MCP_Q_LIST" --arg srv "$srv"
+		[[ $out == O* ]] || { out=${out#?$'\x1f'}; warn "MCP '$srv': tools/list: ${out:-failed}\n"; return 1; }
+		out=${out#?$'\x1f'}
+		cursor=${out%%$'\x1e'*}
+		out=${out#*$'\x1e'}
+		while [[ $out == *$'\x1e'* ]]; do
+			rec=${out%%$'\x1e'*};  out=${out#*$'\x1e'}
+			safe=${rec%%$'\x1f'*}; rec=${rec#*$'\x1f'}
+			orig=${rec%%$'\x1f'*}; json=${rec#*$'\x1f'}
+			MA_TOOL[$safe]=$json
+			MA_MCP_TOOLMAP[$safe]=$srv$'\x1f'$orig
+			[[ $lazy == true ]] && MA_LAZY_TOOLS[$safe]=1
+			eval "execute_$safe() { _mcp_call $safe \"\${1:-}\"; }; header_$safe() { _mcp_header \"\${1:-}\"; }"
+		done
+		[[ -n $cursor ]] || break
+	done
+	return 0
+}
+
+_mcp_server_start() { # $1:server $2:lazy
+	if _mcp_server_init "$1" && _mcp_register_tools "$1" "$2"; then return 0; fi
+	_mcp_stdio_stop "$1"
+	return 1
+}
+
+_mcp_call() { # 1:fn_name  2:fn_args
+	local entry=${MA_MCP_TOOLMAP[${1:-}]:-} fn_args=${2:-} srv='' orig='' body='' out='' en='' try=0 id=''
+	[[ -n $entry ]] || { echo "ERROR: unknown MCP tool ${1:-}"; return 1; }
+	srv=${entry%%$'\x1f'*}; orig=${entry#*$'\x1f'}
+	[[ -n $fn_args ]] || fn_args='{}'
+	ma_now id
+	if [[ ${MA_MCP_TRUST_ARGS:-} == true && $fn_args == \{*\} ]]; then # skip validation
+		_mcp_jescape "$orig" en
+		body='{"jsonrpc":"2.0","id":'$id',"method":"tools/call","params":{"name":"'$en'","arguments":'$fn_args'}}'
+	else
+		body=$( jq -cbs --arg n "$orig" --argjson id "$id" \
+			'if length == 1 and (.[0] | type) == "object"
+			 then {jsonrpc:"2.0", id:$id, method:"tools/call", params:{name:$n, arguments:.[0]}}
+			 else error("arguments must be exactly one JSON object") end' <<< "$fn_args" 2>/dev/null )
+		[[ -n $body ]] || { echo "ERROR: tool arguments are not valid JSON"; return 1; }
+	fi
+	for try in 1 2; do
+		_mcp_request "$srv" "$body" "$id" out "$_MCP_Q_CALL" && break
+		# HTTP session expired
+		(( try == 1 && _MCP_CODE == 404 )) && [[ -n ${MA_MCP_SESSION[$srv]:-} ]] || break
+		_mcp_server_init "$srv" || break
+	done
+
+	[[ -n $out ]] || { echo "ERROR: unparseable response from MCP server '$srv'"; return 1; }
+	printf '%s\n' "${out#?$'\x1f'}"
+	[[ $out == O* ]]
+}
+
+_mcp_boot() {
+	[[ -n ${_MCP_BOOTED:-} ]] && return 0
+	declare -g _MCP_BOOTED=1
+	declare -gA MA_MCP_CFG=() MA_MCP_SESSION=() MA_MCP_VER=() MA_MCP_TOOLMAP=() MA_MCP_CURL_EXTRA_ARGS=()
+	declare -gA MA_MCP_RFD=() MA_MCP_WFD=() MA_MCP_PID=() MA_MCP_LOG=()      # stdio servers
+	declare -g  _MCP_ID=10 _MCP_BODY='' _MCP_CODE=0 _MCP_SSE=false _MCP_ERR=''
+	declare -g  MA_MCP_DEFAULT_VER=${MA_MCP_DEFAULT_VER:-2025-06-18}
+	declare -gr _MCP_RE_STATUS='^HTTP/[0-9.]+[[:space:]]+([0-9]{3})'
+	declare -gr _MCP_RE_SID=$'\nmcp-session-id:[ \t]*([^\r\n]+)'
+	declare -gr _MCP_RE_SSE=$'\ncontent-type:[ \t]*text/event-stream'
+
+	# Output: status, \x1f, payload. Status: O=ok, X=tool error, E=RPC error, N=no match (keep reading).
+	# tools/list payload: cursor \x1e, then records of safe name, original name, and JSON separated by \x1f.
+	local lib='' q_init='' q_list='' q_call=''
+
+	IFS= read -r -d '' lib <<'EOF' || true
+def ok: type == "object" and (.id == $id or (.id == null and has("error")))
+        and (has("result") or has("error"));
+def resp:
+  [inputs] as $l
+  | if $sse then
+      ($l | map(select(startswith("data:")) | ltrimstr("data:") | ltrimstr(" ") | rtrimstr("\r")
+                | try fromjson catch empty)
+          | map(select(ok)) | first)
+    else ($l | join("\n") | try fromjson catch null | if ok then . else null end) end;
+EOF
+
+	IFS= read -r -d '' q_init <<'EOF' || true
+resp as $r
+| if   $r == null then "N\u001fERROR: no matching response to initialize"
+  elif $r.error   then "E\u001fERROR: \($r.error.message // "initialize failed")"
+  else "O\u001f\($r.result.protocolVersion // "")" end
+EOF
+
+	IFS= read -r -d '' q_list <<'EOF' || true
+resp as $r
+| if   $r == null then "N\u001fERROR: no matching response to tools/list"
+  elif $r.error   then "E\u001fERROR: \($r.error.message // "tools/list failed")"
+  else "O\u001f\($r.result.nextCursor // "")\u001e"
+       + ( ($r.result.tools // [])
+           | map( (($srv + "_" + .name) | gsub("[^A-Za-z0-9_]"; "_") | .[0:64]) as $safe
+                  | $safe + "\u001f" + .name + "\u001f"
+                  + ( { type: "function", name: $safe,
+                        description: (.description // .title // ""),
+                        parameters: ((.inputSchema // {type: "object", properties: {}}) | del(.["$schema"])) }
+                      | tojson )
+                  + "\u001e" )
+           | join("") )
+  end
+EOF
+
+	IFS= read -r -d '' q_call <<'EOF' || true
+resp as $r
+| if   $r == null then "N\u001fERROR: no matching response to tools/call"
+  elif $r.error   then "E\u001fERROR: \($r.error.message // "unknown MCP error") (code \($r.error.code // "?"))"
+  else ($r.result // {}) as $x
+    | ( ($x.content // [])
+        | map( if   .type == "text"     then (.text // "")
+               elif .type == "image"    then "[image: \(.mimeType // "unknown")]"
+               elif .type == "resource" then (.resource.text // "[resource: \(.resource.uri // "?")]")
+               else "[\(.type) content]" end )
+        | join("\n") ) as $t
+    | ( if $t == "" and $x.structuredContent != null then ($x.structuredContent | tojson) else $t end ) as $o
+    | (if $x.isError == true then "X" else "O" end) + "\u001f" + $o
+  end
+EOF
+
+	declare -gr _MCP_Q_INIT=$lib$'\n'$q_init
+	declare -gr _MCP_Q_LIST=$lib$'\n'$q_list
+	declare -gr _MCP_Q_CALL=$lib$'\n'$q_call
+}
+
+mcp_load() {
+	_mcp_boot
+	local var='' srv='' key='' fmt='' lazy='' f='' line='' q='' qurl='' text=''
+	local call_to=${MA_MCP_TIMEOUT:-120}
+	local -n cfg=MA_MCP_CFG
+	declare -gA MA_MCP_SERVERS=()
+	for var in "${!mcp_@}"; do
+		[[ ${!var@a} == *A* ]] || continue            # associative arrays only
+		unset -n cfg; local -n cfg=$var
+		[[ -n ${cfg[command]:-} || -n ${cfg[api_url]:-} ]] || continue
+		srv=${var#mcp_}
+		MA_MCP_SERVERS[$srv]=1
+		lazy=${cfg[lazy]:-true}
+		if [[ -n ${cfg[command]:-} ]]; then
+			ma_spinner_start "spawning mcp: ${cfg[command]}"
+			_mcp_stdio_spawn "$srv" "${cfg[command]}" "${cfg[env]:-}" "${cfg[cwd]:-}" &>/dev/null || continue
+		else
+			key=${cfg[api_key]:-}
+			fmt=${cfg[auth_header]:-'Authorization: Bearer %s'}
+			MA_MCP_CURL_EXTRA_ARGS[$srv]=${cfg[extra_args]:-}
+			_mcp_jescape "${cfg[api_url]}" qurl
+			text=$'silent\nshow-error\ninclude\n'
+			text+="max-time = $call_to"$'\n'
+			text+="url = \"$qurl\""$'\n'
+			text+=$'header = "Content-Type: application/json"\n'
+			text+=$'header = "Accept: application/json, text/event-stream"\n'
+			if [[ -n $key ]]; then
+				printf -v line "$fmt" "$key"
+				_mcp_jescape "$line" q
+				text+="header = \"$q\""$'\n'
+			fi
+			f="$_ma_tmp_dir/ma-mcp-$$-${srv//[^A-Za-z0-9_]/_}.cfg"
+			( umask 077; printf '%s' "$text" > "$f" ) || { warn "MCP '$srv': cannot write $f\n"; continue; }
+			MA_MCP_CFG[$srv]=$f
+		fi
+		_mcp_server_start "$srv" "$lazy"
+		ma_spinner_stop
+	done
+	unset -n cfg
+	return 0
+}
+
+mcp_cleanup() {
+	[[ "${MA_MCP_CFG[*]+x}" ]] || return
+	local srv='' log=''
+	for srv in "${!MA_MCP_PID[@]}"; do _mcp_stdio_stop "$srv"; done
+	if (( ${#MA_MCP_CFG[@]} )); then rm -f "${MA_MCP_CFG[@]}"; fi
+	if (( ${#MA_MCP_LOG[@]} )); then rm -f "${MA_MCP_LOG[@]}"; fi
+	return 0
+}
+
+
 
 _ma_tmp_dir=${MA_TMP_DIR:-"${TMPDIR:-/tmp}/markov"}
 _ma_cache_dir=${MA_CACHE_DIR:-/var/tmp/markov/cache}
@@ -11928,6 +12305,8 @@ _ma_cleanup() {
 	[[ -f $MA_DOC_PATH ]] && info "Session closed: $MA_DOC_NAME\n"
 
 	printf "${A_CURSOR_ON}${A_R}" >&2
+
+	mcp_cleanup
 
     exit "$ret_status"
 }

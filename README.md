@@ -106,6 +106,8 @@ not work as intended.
 * Built-in tools enabled by default: `read`, `write`, `edit`, `bash`, 
   `skills`, `execute`, `websearch`, `delegate`
 * Additional tools: `symbols`, `reload`, `docs`, `ask`, `grep`, `find`, `ls`
+* Basic **MCP support**: over *Streamable HTTP* and *local stdio*,
+  OAuth-only servers not supported
 * **Built-in tool call analyzer**: use a trusted LLM to analyze tool calls
 * **Inter-process communication** for sending and queueing messages from
   external scripts/processes
@@ -600,6 +602,7 @@ Configuration file options (overridden by CLI options):
  MARKOV_TRUST_DIR            Trust the current directory
  MARKOV_USE_TOOLS            Set to false to disable tool usage
  MARKOV_USE_MODULES          Set to false to disable modules
+ MARKOV_USE_MCP              Set to false to disable MCP servers
  MARKOV_USE_PROMPTS          Set to false to disable prompt templates
  MARKOV_USE_SKILLS           Set to false to disable skills
  MARKOV_USE_CONTEXT_FILES    Set to false to disable context files
@@ -757,6 +760,53 @@ Set the `evaluator` field of a delegate role to `task_evaluator` to use it.
 
 This role is configured automatically by `Markov`, but you may replace its
 system prompt to better adapt it to your sub-tasks.
+
+
+#### MCP
+
+Supports MCP over **Streamable HTTP** and **local stdio**.
+OAuth-only servers are not supported.
+Server requests are ignored: client advertises no capabilities.
+
+Configure each server in a global associative array named `mcp_*`.
+Tool names use the server name without the `mcp_` prefix to avoid
+collisions (e.g. `mcp_github` tools use the `github_` prefix).
+
+Server examples:
+
+```bash
+declare -gA mcp_github=(
+  [api_url]='https://example.com/mcp'
+  [api_key]="$GITHUB_TOKEN"
+)
+
+declare -gA mcp_files=(
+  [command]='npx -y @modelcontextprotocol/server-filesystem /home/me/project'
+  [env]='FOO=bar TOKEN=abc'
+)
+```
+
+HTTP server fields:
+
+* `api_url`: MCP server URL
+* `api_key`: (Optional) authentication key or token
+* `auth_header`: (Optional) header format; `%s` is replaced with
+  `api_key`. Defaults to `Authorization: Bearer %s`
+* `extra_args`: (Optional) more arguments passed to curl
+
+Some server may use `[auth_header]='x-api-key: %s'` for authentication.
+
+Local (stdio) server fields:
+* `command`: Command used to launch the server
+* `env`: (Optional) space-separated `VAR=value` prefixes
+* `cwd`: (Optional) working directory
+
+Tools are automatically marked as `lazy`. Use `[lazy]=false` to load them
+normally.
+
+`MA_MCP_TIMEOUT` sets the timeout for initialization and responses
+in seconds (default: `120`).
+
 
 #### System prompt
 
