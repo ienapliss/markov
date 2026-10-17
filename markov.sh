@@ -11971,7 +11971,6 @@ _mcp_stdio_post() { # $1:server $2:json_body $3:request_id ('' for notifications
 	if ! kill -0 "$pid" 2>/dev/null; then
 		_MCP_ERR="MCP server '$srv' is not running (stderr log: ${MA_MCP_LOG[$srv]})"; return 1
 	fi
-	[[ $BASHPID != "$$" ]] && trap '' PIPE
 	while IFS= read -r -t 0 -u "$rfd"; do IFS= read -r -t 1 -u "$rfd" line || break; done
 	if ! printf '%s\n' "$body" >&"$wfd"; then
 		_MCP_ERR="write to MCP server '$srv' failed (stderr log: ${MA_MCP_LOG[$srv]})"; return 1
@@ -12155,6 +12154,7 @@ _mcp_boot() {
 	declare -gr _MCP_RE_STATUS='^HTTP/[0-9.]+[[:space:]]+([0-9]{3})'
 	declare -gr _MCP_RE_SID=$'\nmcp-session-id:[ \t]*([^\r\n]+)'
 	declare -gr _MCP_RE_SSE=$'\ncontent-type:[ \t]*text/event-stream'
+	trap '' PIPE
 
 	# Output: status, \x1f, payload. Status: O=ok, X=tool error, E=RPC error, N=no match (keep reading).
 	# tools/list payload: cursor \x1e, then records of safe name, original name, and JSON separated by \x1f.
