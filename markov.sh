@@ -12149,7 +12149,7 @@ _mcp_boot() {
 	declare -g _MCP_BOOTED=1
 	declare -gA MA_MCP_CFG=() MA_MCP_SESSION=() MA_MCP_VER=() MA_MCP_TOOLMAP=() MA_MCP_CURL_EXTRA_ARGS=()
 	declare -gA MA_MCP_RFD=() MA_MCP_WFD=() MA_MCP_PID=() MA_MCP_LOG=()      # stdio servers
-	declare -g  _MCP_ID=10 _MCP_BODY='' _MCP_CODE=0 _MCP_SSE=false _MCP_ERR=''
+	declare -g  _MCP_BODY='' _MCP_CODE=0 _MCP_SSE=false _MCP_ERR=''
 	declare -g  MA_MCP_DEFAULT_VER=${MA_MCP_DEFAULT_VER:-2025-06-18}
 	declare -gr _MCP_RE_STATUS='^HTTP/[0-9.]+[[:space:]]+([0-9]{3})'
 	declare -gr _MCP_RE_SID=$'\nmcp-session-id:[ \t]*([^\r\n]+)'
