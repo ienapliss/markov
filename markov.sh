@@ -11954,7 +11954,7 @@ ma_repl() {
 
 _mcp_stdio_spawn() { # $1:server $2:command_line $3:env $4:cwd
 	local srv=$1 cmd=$2 envp=${3:-} cwd=${4:-}
-	local name="MCPP_${srv//[^A-Za-z0-9_]/_}" log="$_ma_tmp_dir/ma-mcp-$$-${srv//[^A-Za-z0-9_]/_}.log"
+	local name="MCPP_${srv//[^A-Za-z0-9_]/_}" log="$_ma_tmp_dir/ma-mcp-$BASHPID-${srv//[^A-Za-z0-9_]/_}.log"
 	: > "$log" || { err "MCP '$srv': cannot write $log\n"; return 1; }
 	eval "coproc $name { ${cwd:+cd \"\$cwd\" || exit 1; }${envp:+$envp }exec $cmd 2>>\"\$log\"; }" 2>/dev/null
 	local -n _arr=$name _pid=${name}_PID
@@ -12260,7 +12260,7 @@ mcp_load() {
 				_mcp_jescape "$line" q
 				text+="header = \"$q\""$'\n'
 			fi
-			f="$_ma_tmp_dir/ma-mcp-$$-${srv//[^A-Za-z0-9_]/_}.cfg"
+			f="$_ma_tmp_dir/ma-mcp-$BASHPID-${srv//[^A-Za-z0-9_]/_}.cfg"
 			( umask 077; printf '%s' "$text" > "$f"; : > "${f%.cfg}.sid" ) || { warn "MCP '$srv': cannot write $f\n"; continue; }
 			MA_MCP_CFG[$srv]=$f
 		fi
