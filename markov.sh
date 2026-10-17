@@ -12224,6 +12224,7 @@ mcp_load() {
 	local -n cfg=MA_MCP_CFG
 	declare -gA MA_MCP_SERVERS=()
 	for var in "${!mcp_@}"; do
+		ma_spinner_stop
 		[[ ${!var@a} == *A* ]] || continue            # associative arrays only
 		unset -n cfg; local -n cfg=$var
 		[[ -n ${cfg[command]:-} || -n ${cfg[api_url]:-} ]] || continue
@@ -12253,8 +12254,8 @@ mcp_load() {
 			MA_MCP_CFG[$srv]=$f
 		fi
 		_mcp_server_start "$srv" "$lazy"
-		ma_spinner_stop
 	done
+	ma_spinner_stop
 	unset -n cfg
 	return 0
 }
