@@ -12260,7 +12260,7 @@ mcp_load() {
 }
 
 mcp_cleanup() {
-	[[ "${MA_MCP_CFG[*]+x}" ]] || return
+	[[ -n ${_MCP_BOOTED:-} ]] || return 0
 	local srv='' log=''
 	for srv in "${!MA_MCP_PID[@]}"; do _mcp_stdio_stop "$srv"; done
 	if (( ${#MA_MCP_CFG[@]} )); then rm -f "${MA_MCP_CFG[@]}"; fi
