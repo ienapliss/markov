@@ -8854,7 +8854,6 @@ _tool_execute() {
 						elif ma_pattern_check MA_PATTERNS_SECRETS "$_path"; then need_confirm=true; confirm_reason="reads ${_PATTERN_REASON}"
 						fi
 					;;
-					*) need_confirm=true; confirm_reason="unchecked tool" ;;
 				esac
 			fi
 		fi
