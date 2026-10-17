@@ -7467,9 +7467,10 @@ _api_call() { # non-streaming
 		openai_chat)
 			mapfile -d '' -t api_response < <(
 				jq -brj '
-					(.choices[0].message.reasoning // .choices[0].message.reasoning_content // .choices[0].message.thinking // ""),
+					def nul: tostring | gsub("\u0000";"");
+					((.choices[0].message.reasoning // .choices[0].message.reasoning_content // .choices[0].message.thinking // "") | nul),
 					"\u0000",
-					(.choices[0].message.content // ""),
+					((.choices[0].message.content // "") | nul),
 					"\u0000",
 					(
 						(.choices[0].message.tool_calls // []) +
@@ -7483,6 +7484,7 @@ _api_call() { # non-streaming
 		openai_resp)
 			mapfile -d '' -t api_response < <(
 				jq -brj '
+					def nul: tostring | gsub("\u0000";"");
 					(
 						[
 							.output[]?
@@ -7491,7 +7493,7 @@ _api_call() { # non-streaming
 								(.summary[]?.text // empty),
 								(.content[]? | select(.type=="reasoning_text") | .text)
 							  )
-						] | join("")
+						] | join("") | nul
 					),
 					"\u0000",
 					(
@@ -7501,7 +7503,7 @@ _api_call() { # non-streaming
 							| .content[]?
 							| select(.type=="output_text")
 							| .text
-						] | join("")
+						] | join("") | nul
 					),
 					"\u0000",
 					(
@@ -7518,9 +7520,10 @@ _api_call() { # non-streaming
 		anthropic)
 			mapfile -d '' -t api_response < <(
 				jq -brj '
-					([.content[]? | select(.type=="thinking") | (.thinking // .text // .content // "")] | join("")),
+					def nul: tostring | gsub("\u0000";"");
+					([.content[]? | select(.type=="thinking") | (.thinking // .text // .content // "")] | join("") | nul),
 					"\u0000",
-					([.content[]? | select(.type=="text") | .text] | join("")),
+					([.content[]? | select(.type=="text") | .text] | join("") | nul),
 					"\u0000",
 					([.content[]? | select(.type=="tool_use") | {
 						id: .id,
@@ -7577,6 +7580,7 @@ _api_call_stream() {
 	_flush_stderr() {
 		(( ${#_stderr_buffer[@]} > 0 )) && [[ ${MA_HIDE_THINKING:-} != true ]] || return
 		local s; printf -v s '%s' "${_stderr_buffer[@]}";
+		s=${s//[$'\e\r\a\b\177']/}
 		_hook_call response_stream "$s" ""
 		[[ ${MA_ANSI:-} != false ]] && s="${s//"$nl"/${A_K}${nl}}"
 		printf "${A_R}${A_THINK}%s${A_K}" "$s" >&2
@@ -7587,6 +7591,7 @@ _api_call_stream() {
 		_flush_stdout() {
 			(( ${#_stdout_buffer[@]} > 0 )) || return
 			local s; printf -v s '%s' "${_stdout_buffer[@]}";
+			s=${s//[$'\e\r\a\b\177']/}
 			_hook_call response_stream "" "$s"
 			[[ ${MA_ANSI:-} != false ]] && s="${s//"$nl"/${A_K}${nl}}"
 			printf "${A_R}${A_RESP}%s${A_K}" "$s"
@@ -7596,6 +7601,7 @@ _api_call_stream() {
 		_flush_stdout() {
 			(( ${#_stdout_buffer[@]} > 0 )) || return
 			local s; printf -v s '%s' "${_stdout_buffer[@]}";
+			s=${s//[$'\e\r\a\b\177']/}
 			_hook_call response_stream "" "$s"
 			printf "%s" "$s"
 			_stdout_buffer=()
@@ -8748,17 +8754,25 @@ _tool_approval_key() {
 		*) value=$(jq -cbr '.' <<< "$fn_args" 2>/dev/null); limit=0; need_hash=1 ;;
 	esac
 	[[ -n $value ]] || return 1
+	local safe_re='^[A-Za-z0-9_./+=,:-]+$'
+	[[ $value =~ $safe_re ]] || { need_hash=1; limit=0; }
 	if (( need_hash && ${#value} > limit )); then
 		ma_hash hash "$value"
-		if [[ -n $hash ]]; then value=${value:0:limit}$hash; else value=${value:0:1024}; fi
+		[[ -n $hash ]] || return 1
+		value=${value:0:limit}$hash
 	fi
-	key=$fn_name$sep$value
+	key=$fn_name:$value
 }
 
 _tool_execute() {
 	local call_id="$1" call_fn_name="$2" fn_name="$2" fn_args="$3" _tool_result=
 
 	ma_toolcall_resolve_real fn_name fn_args
+	[[ $fn_name =~ ^[A-Za-z_][A-Za-z0-9_]{0,63}$ ]] || {
+		warn "Invalid tool name.\n"
+		thread_add_tool_result MA_THREAD_JSON "$call_id" "$call_fn_name" "DENIED: invalid tool name"$'\n'
+		return 1
+	}
 
 	(( ++MA_TOOLS_CALLS["$fn_name"] ))
 
@@ -8814,27 +8828,33 @@ _tool_execute() {
 				ma_api_send_request _temp_analyzer_json _api_response _api_rc &>/dev/null
 				call_check="${_api_response[idx_content]:-}"
 				_thread_switch_global_references "$cur_thread"
-				(( $_api_rc != 0 )) || [[ $call_check != *PASS* ]] && { need_confirm=true; confirm_reason="flagged by call_analyzer"; }
+				(( $_api_rc != 0 )) || [[ $call_check != PASS* ]] && { need_confirm=true; confirm_reason="flagged by call_analyzer"; }
 				ma_spinner_stop
 			elif [[ ${MA_CALLCHECK_PATTERN:-} == true ]]; then
 				case $fn_name in
 					bash)
 						local _cmd=
-						{ IFS= read -r -d '' _cmd; } < <( jq -brj '(.command // ""), "\u0000"' <<< "$fn_args" 2>/dev/null)
-						if   ma_pattern_check MA_PATTERNS_BASH "$_cmd";    then need_confirm=true; confirm_reason=$_PATTERN_REASON
+						{ IFS= read -r -d '' _cmd; } < <( jq -brj '(.command | if type=="string" and (contains("\u0000")|not) then . else empty end), "\u0000"' <<< "$fn_args" 2>/dev/null)
+						if   [[ -z $_cmd ]]; then need_confirm=true; confirm_reason="unparseable command"
+						elif ma_pattern_check MA_PATTERNS_BASH "$_cmd";    then need_confirm=true; confirm_reason=$_PATTERN_REASON
 						elif ma_pattern_check MA_PATTERNS_SECRETS "$_cmd"; then need_confirm=true; confirm_reason="touches ${_PATTERN_REASON}"
 						fi
 					;;
 					write|edit)
 						local _path=
-						{ IFS= read -r -d '' _path; } < <( jq -brj '(.path // ""), "\u0000"' <<< "$fn_args" 2>/dev/null)
-						if ma_pattern_check MA_PATTERNS_PROTECTED_PATHS "$_path"; then need_confirm=true; confirm_reason=$_PATTERN_REASON; fi
+						{ IFS= read -r -d '' _path; } < <( jq -brj '(.path | if type=="string" and (contains("\u0000")|not) then . else empty end), "\u0000"' <<< "$fn_args" 2>/dev/null)
+						if [[ -z $_path || $_path == *..* || $_path == '~'* || $_path == *'$'* ]]; then need_confirm=true; confirm_reason="path needs review"
+						elif ma_pattern_check MA_PATTERNS_PROTECTED_PATHS "$_path"; then need_confirm=true; confirm_reason=$_PATTERN_REASON
+						fi
 					;;
 					read|symbols|grep)
 						local _path=
-						{ IFS= read -r -d '' _path; } < <( jq -brj '(.path // ""), "\u0000"' <<< "$fn_args" 2>/dev/null)
-						if ma_pattern_check MA_PATTERNS_SECRETS "$_path"; then need_confirm=true; confirm_reason="reads ${_PATTERN_REASON}"; fi
+						{ IFS= read -r -d '' _path; } < <( jq -brj '(.path | if type=="string" and (contains("\u0000")|not) then . else empty end), "\u0000"' <<< "$fn_args" 2>/dev/null)
+						if [[ -z $_path || $_path == *..* || $_path == '~'* || $_path == *'$'* ]]; then need_confirm=true; confirm_reason="path needs review"
+						elif ma_pattern_check MA_PATTERNS_SECRETS "$_path"; then need_confirm=true; confirm_reason="reads ${_PATTERN_REASON}"
+						fi
 					;;
+					*) need_confirm=true; confirm_reason="unchecked tool" ;;
 				esac
 			fi
 		fi
