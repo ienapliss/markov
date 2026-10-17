@@ -11965,16 +11965,20 @@ _mcp_stdio_spawn() { # $1:server $2:command_line $3:env $4:cwd
 }
 
 _mcp_stdio_post() { # $1:server $2:json_body $3:request_id ('' for notifications)
-	local srv=$1 body=${2//$'\n'/ } want=${3:-} line=''
+	local srv=$1 body=${2//$'\n'/ } want=${3:-} line='' wrc=0
 	local wfd=${MA_MCP_WFD[$srv]} rfd=${MA_MCP_RFD[$srv]} pid=${MA_MCP_PID[$srv]}
 	_MCP_CODE=0; _MCP_BODY=''; _MCP_SSE=false; _MCP_ERR=''
 	if ! kill -0 "$pid" 2>/dev/null; then
 		_MCP_ERR="MCP server '$srv' is not running (stderr log: ${MA_MCP_LOG[$srv]})"; return 1
 	fi
 	while IFS= read -r -t 0 -u "$rfd"; do IFS= read -r -t 1 -u "$rfd" line || break; done
-	if ! printf '%s\n' "$body" >&"$wfd"; then
+	trap '' PIPE
+	printf '%s\n' "$body" >&"$wfd" 2>/dev/null; wrc=$?
+	trap - PIPE
+	if (( wrc )); then
 		_MCP_ERR="write to MCP server '$srv' failed (stderr log: ${MA_MCP_LOG[$srv]})"; return 1
 	fi
+
 	[[ -n $want ]] || return 0
 	_mcp_stdio_read "$srv" "$want"
 }
@@ -12017,8 +12021,12 @@ _mcp_stdio_stop() { # $1:server
 _mcp_post() { # $1:server  $2:json_body  $3:request_id ('' for notifications)
 	[[ -n ${MA_MCP_WFD[${1:-}]:-} ]] && { _mcp_stdio_post "$@"; return; }
 
-	local srv=$1 raw='' hdr='' rc=0
+	local srv=$1 raw='' hdr='' rc=0 sid='' sidf=${MA_MCP_CFG[$1]%.cfg}.sid
 	local -a h=()
+
+	# sub-sehll may restart session
+	[[ -r $sidf ]] && { IFS= read -r sid < "$sidf"; MA_MCP_SESSION[$srv]=$sid; }
+
 	[[ -n ${MA_MCP_VER[$srv]:-} ]]     && h+=( -H "MCP-Protocol-Version: ${MA_MCP_VER[$srv]}" )
 	[[ -n ${MA_MCP_SESSION[$srv]:-} ]] && h+=( -H "Mcp-Session-Id: ${MA_MCP_SESSION[$srv]}" )
 	_MCP_CODE=0; _MCP_BODY=''; _MCP_SSE=false; _MCP_ERR=''
@@ -12036,7 +12044,10 @@ _mcp_post() { # $1:server  $2:json_body  $3:request_id ('' for notifications)
 	done
 
 	shopt -s nocasematch
-	[[ $hdr =~ $_MCP_RE_SID ]] && MA_MCP_SESSION[$srv]=${BASH_REMATCH[1]}
+	if [[ $hdr =~ $_MCP_RE_SID ]]; then
+		MA_MCP_SESSION[$srv]=${BASH_REMATCH[1]}
+		printf '%s' "${BASH_REMATCH[1]}" > "$sidf"
+	fi
 	[[ $hdr =~ $_MCP_RE_SSE ]] && _MCP_SSE=true
 	shopt -u nocasematch
 
@@ -12064,7 +12075,8 @@ _mcp_request() { # $1:server $2:body $3:request id $4:out var $5:jq program  [$6
 }
 
 _mcp_server_init() { # $1:server
-	local srv=$1 out=''
+	local srv=$1 out='' sidf=''
+	[[ -n ${MA_MCP_CFG[$srv]:-} ]] && { sidf=${MA_MCP_CFG[$srv]%.cfg}.sid; : > "$sidf"; }
 	MA_MCP_SESSION[$srv]=''; MA_MCP_VER[$srv]=''
 	_mcp_request "$srv" \
 		'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"'"$MA_MCP_DEFAULT_VER"'","capabilities":{},"clientInfo":{"name":"ma-harness","version":"0.1"}}}' \
@@ -12154,7 +12166,6 @@ _mcp_boot() {
 	declare -gr _MCP_RE_STATUS='^HTTP/[0-9.]+[[:space:]]+([0-9]{3})'
 	declare -gr _MCP_RE_SID=$'\nmcp-session-id:[ \t]*([^\r\n]+)'
 	declare -gr _MCP_RE_SSE=$'\ncontent-type:[ \t]*text/event-stream'
-	trap '' PIPE
 
 	# Output: status, \x1f, payload. Status: O=ok, X=tool error, E=RPC error, N=no match (keep reading).
 	# tools/list payload: cursor \x1e, then records of safe name, original name, and JSON separated by \x1f.
@@ -12250,7 +12261,7 @@ mcp_load() {
 				text+="header = \"$q\""$'\n'
 			fi
 			f="$_ma_tmp_dir/ma-mcp-$$-${srv//[^A-Za-z0-9_]/_}.cfg"
-			( umask 077; printf '%s' "$text" > "$f" ) || { warn "MCP '$srv': cannot write $f\n"; continue; }
+			( umask 077; printf '%s' "$text" > "$f"; : > "${f%.cfg}.sid" ) || { warn "MCP '$srv': cannot write $f\n"; continue; }
 			MA_MCP_CFG[$srv]=$f
 		fi
 		_mcp_server_start "$srv" "$lazy"
@@ -12264,7 +12275,7 @@ mcp_cleanup() {
 	[[ -n ${_MCP_BOOTED:-} ]] || return 0
 	local srv='' log=''
 	for srv in "${!MA_MCP_PID[@]}"; do _mcp_stdio_stop "$srv"; done
-	if (( ${#MA_MCP_CFG[@]} )); then rm -f "${MA_MCP_CFG[@]}"; fi
+	if (( ${#MA_MCP_CFG[@]} )); then rm -f "${MA_MCP_CFG[@]}" "${MA_MCP_CFG[@]/%.cfg/.sid}"; fi
 	if (( ${#MA_MCP_LOG[@]} )); then rm -f "${MA_MCP_LOG[@]}"; fi
 	return 0
 }
