@@ -987,7 +987,7 @@ in seconds (default: `120`).
 #### Speech-to-Text (STT)
 
 If `sox` and `whisper` are available, you can record speech for transcription
-with `Alt+R`.
+with `Ctrl+Alt+R`.
 
 Markov can use an existing Whisper server via URL:
 
@@ -10046,7 +10046,7 @@ _prompt_setup(){
 
 	[[ ${MA_USE_WHISPER:-} != false ]] && {
 		_whisper_setup
-		bind -x '"\er": _whisper_dictate'
+		bind -x '"\e\C-r": _whisper_dictate'
 	}
 }
 
