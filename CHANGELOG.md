@@ -2,6 +2,15 @@
 
 All notable changes to this project will be listed here.
 
+## [0.3.0] - 2026-10-25
+
+### Added
+- **STT Support**: Added Speech-to-Text support via `sox` and `whisper`.
+
+### Fixed
+- **MCP Improvements**: Improved MCP support with persistent HTTP session IDs, better logging, and robust SIGPIPE handling.
+- **Security**: Hardened against malicious model output.
+
 ## [0.2.0] - 2026-10-16
 
 ### Added

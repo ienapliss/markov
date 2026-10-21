@@ -108,6 +108,7 @@ not work as intended.
 * Additional tools: `symbols`, `reload`, `docs`, `ask`, `grep`, `find`, `ls`
 * Basic **MCP support**: over *Streamable HTTP* and *local stdio*,
   OAuth-only servers not supported
+* **Speech-to-Text**: via `whisper` and `sox`
 * **Built-in tool call analyzer**: use a trusted LLM to analyze tool calls
 * **Inter-process communication** for sending and queueing messages from
   external scripts/processes
@@ -807,6 +808,34 @@ normally.
 `MA_MCP_TIMEOUT` sets the timeout for initialization and responses
 in seconds (default: `120`).
 
+
+#### Speech-to-Text (STT)
+
+If `sox` and `whisper` are available, you can record speech for transcription
+with `Alt+R`.
+
+Markov can use an existing Whisper server via URL:
+
+```bash
+MA_WHISPER_URL="http://localhost:8178"
+```
+
+Or invoke the `whisper-cli` binary directly (requires a model):
+
+```bash
+MA_WHISPER_MODEL="/path-to-models/ggml-base.bin"
+MA_WHISPER_BIN=/path/whisper-cli	# only if whisper-cli not in PATH 
+```
+
+Default configuration:
+
+```bash
+MA_WHISPER_LANG=en      # transcription language
+MA_REC_MAX_SECONDS=30   # maximum recording time
+MA_REC_SILENCE_MS=1000  # auto-stop after silence (ms)
+MA_REC_DEVICE=default   # default waveaudio device (Windows)
+MA_REC_SFX=true         # set false to disable ffplay SFX
+```
 
 #### System prompt
 

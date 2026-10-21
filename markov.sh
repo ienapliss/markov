@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: MIT
 # ============================================================================
 
-MA_VERSION="0.2.0"
+MA_VERSION="0.3.0"
 
 set -o pipefail
 [[ -v MA_DEVELOP ]] && set -u
@@ -274,6 +274,7 @@ not work as intended.
 * Additional tools: `symbols`, `reload`, `docs`, `ask`, `grep`, `find`, `ls`
 * Basic **MCP support**: over *Streamable HTTP* and *local stdio*,
   OAuth-only servers not supported
+* **Speech-to-Text**: via `whisper` and `sox`
 * **Built-in tool call analyzer**: use a trusted LLM to analyze tool calls
 * **Inter-process communication** for sending and queueing messages from
   external scripts/processes
@@ -982,6 +983,34 @@ normally.
 `MA_MCP_TIMEOUT` sets the timeout for initialization and responses
 in seconds (default: `120`).
 
+
+#### Speech-to-Text (STT)
+
+If `sox` and `whisper` are available, you can record speech for transcription
+with `Alt+R`.
+
+Markov can use an existing Whisper server via URL:
+
+```bash
+MA_WHISPER_URL="http://localhost:8178"
+```
+
+Or invoke the `whisper-cli` binary directly (requires a model):
+
+```bash
+MA_WHISPER_MODEL="/path-to-models/ggml-base.bin"
+MA_WHISPER_BIN=/path/whisper-cli	# only if whisper-cli not in PATH 
+```
+
+Default configuration:
+
+```bash
+MA_WHISPER_LANG=en      # transcription language
+MA_REC_MAX_SECONDS=30   # maximum recording time
+MA_REC_SILENCE_MS=1000  # auto-stop after silence (ms)
+MA_REC_DEVICE=default   # default waveaudio device (Windows)
+MA_REC_SFX=true         # set false to disable ffplay SFX
+```
 
 #### System prompt
 
@@ -1866,7 +1895,7 @@ ma_sleep() {
 	fi
 }
 ma_spinner_start() {
-    [[ "${MA_USE_SPINNER:-}" == false || ! -t 1 ]] && return
+    [[ "${MA_USE_SPINNER:-}" == false  ]] && return
     [[ ! -t 2 ]] && return
 	ma_reserve_screen
 	local msg="${1:-"working…"}"
@@ -1905,7 +1934,7 @@ ma_spinner_start() {
 	fi
 }
 ma_spinner_stop() {
-    [[ "${MA_USE_SPINNER:-}" == false || ! -t 1 ]] && return
+    [[ "${MA_USE_SPINNER:-}" == false ]] && return
 	[[ -n "${_SPINNER_PID:-}" ]] && {
 		[[ ${MA_SPINNER_NO_SUBSHELL:-} != true && $_SPINNER_PID != 0 ]] && {
 			kill "${_SPINNER_PID}" 2>/dev/null
@@ -10014,6 +10043,10 @@ _prompt_setup(){
 		[[ -n $entry ]] && history -s -- "$entry" 2>/dev/null;
 	done
 
+	[[ ${MA_USE_WHISPER:-} != false ]] && {
+		_whisper_setup
+		bind -x '"\er": _whisper_dictate'
+	}
 }
 
 
@@ -12298,6 +12331,111 @@ mcp_cleanup() {
 	if (( ${#MA_MCP_LOG[@]} )); then rm -f "${MA_MCP_LOG[@]}"; fi
 	return 0
 }
+
+
+
+_whisper_sfx_on() {
+	[[ ${MA_REC_SFX:-} != false ]] && ffplay -f lavfi -i \
+	"sine=frequency=780:duration=0.12,afade=t=in:st=0:d=0.01,afade=t=out:st=0.08:d=0.04,pan=stereo|c0=c0|c1=c0,adelay=0|15[s0];
+	 sine=frequency=1040:duration=0.30,afade=t=in:st=0:d=0.01,afade=t=out:st=0.12:d=0.18,pan=stereo|c0=c0|c1=c0,adelay=15|0[s1];
+	 [s0][s1]concat=n=2:v=0:a=1,volume=${MA_REC_SFX_VOL:-0.5}" -autoexit -nodisp &>/dev/null &
+}
+_whisper_sfx_off() {
+	[[ ${MA_REC_SFX:-} != false ]] && ffplay -f lavfi -i \
+	"sine=frequency=1040:duration=0.12,afade=t=in:st=0:d=0.01,afade=t=out:st=0.08:d=0.04,pan=stereo|c0=c0|c1=c0,adelay=15|0[s0];
+	 sine=frequency=780:duration=0.30,afade=t=in:st=0:d=0.01,afade=t=out:st=0.12:d=0.18,pan=stereo|c0=c0|c1=c0,adelay=0|15[s1];
+	 [s0][s1]concat=n=2:v=0:a=1,volume=${MA_REC_SFX_VOL:-0.5}" -autoexit -nodisp &>/dev/null &
+}
+_whisper_setup() {
+	if ! command -v ffplay >/dev/null; then MA_REC_SFX=false; fi
+	: "${MA_REC_DEVICE:=default}"		# waveaudio device name
+	: "${MA_REC_SILENCE_MS:=1000}"		# auto-stop after this much silence
+	: "${MA_REC_THRESH:=3}"				# "speech" = peak above this % of full scale
+	_whisper_msg()  { ma_spinner_stop; printf ${A_INFO}'\r\033[K%s' "$1" >&2 >/dev/tty; }
+	_whisper_stt() { # $1:wav_file
+		local wav=$1;
+		trap "ma_spinner_stop; trap - RETURN" RETURN
+		ma_spinner_start "transcribing…"
+		[[ -n $MA_WHISPER_URL ]] && curl -sf --connect-timeout 0.5 -m 60 \
+			-F "file=@$wav" -F response_format=text -F temperature=0 -F "language=${MA_WHISPER_LANG:-en}" "$MA_WHISPER_URL/inference" 2>/dev/null && return 0
+		[[ -n "${MA_WHISPER_MODEL:-}" ]] || { _whisper_msg "[MA_WHISPER_MODEL not specified]"; return 1; }
+		"${MA_WHISPER_BIN:-"whisper-cli"}" -m "${MA_WHISPER_MODEL:-}" -f "$wav" -l "${MA_WHISPER_LANG:-en}" -t "${MA_REC_THREADS:-4}" -nt -np 2>/dev/null || {
+			_whisper_msg "[whisper-cli failed]"; return 1;
+		}
+	}
+	_whisper_session() {
+		local _whisper_tmpdir pid key out t reason="" speech=0
+		local thr=$(( MA_REC_THRESH * 100 )) win=$(( MA_REC_SILENCE_MS * 32 ))   # 32 bytes/ms @16kHz s16
+		local re='Maximum amplitude:[[:space:]]+([0-9]+)[.,]([0-9]{4})'
+		local -a src=(-d)
+		[[ $OSTYPE == msys* || $OSTYPE == cygwin* ]] && src=(-t waveaudio "$MA_REC_DEVICE")
+
+		_whisper_tmpdir=$(mktemp -d "${_ma_tmp_dir}/whisper.XXXXXX") || return 1
+		local tmpsnd=$_whisper_tmpdir/snd.raw;
+		if [[ $$BASHPID == $$ ]]; then
+			trap "rm -rf '$_whisper_tmpdir'; ma_spinner_stop; ma_tty_echo_on; trap - RETURN" RETURN
+		else
+			trap "rm -rf '$_whisper_tmpdir'; ma_spinner_stop; ma_tty_echo_on; trap - RETURN" EXIT RETURN
+		fi
+		{ sox -q "${src[@]}" -t raw -r 16000 -c 1 -b 16 -e signed-integer "$tmpsnd" trim 0 "${MA_REC_MAX_SECONDS:-30}" </dev/null >"$_whisper_tmpdir/sox.log" 2>&1 & } 2>/dev/null
+		pid=$!
+		ma_spinner_start "listening…"
+		_whisper_sfx_on
+		ma_tty_echo_off
+		while kill -0 "$pid" 2>/dev/null; do
+			if IFS= read -rsn1 -t 0.05 key </dev/tty; then
+				reason=key
+				if [[ $key == $'\e' ]]; then reason=cancel; read -rsn8 -t 0.01 _ </dev/tty || true; fi
+				break
+			fi
+			local size; size=$(ma_get_size "$tmpsnd")
+			(( size > win )) || continue
+			printf -v t '%d.%03d' $(( (size - win) / 32000 )) $(( (size - win) / 32 % 1000 ))
+			out=$(sox -V1 -t raw -r 16000 -e signed-integer -b 16 -c 1 "$tmpsnd" -n trim "$t" stat 2>&1) || true
+			[[ $out =~ $re ]] || continue
+			if (( 10#${BASH_REMATCH[1]} * 10000 + 10#${BASH_REMATCH[2]} >= thr )); then
+				speech=1
+			elif (( speech )); then
+				break
+			fi
+		done
+		_whisper_sfx_off
+		ma_spinner_stop
+		[[ $reason == key ]] && ma_sleep 0.1
+		kill "$pid" 2>/dev/null || true
+		wait "$pid" 2>/dev/null || true
+		[[ $reason == cancel ]] && { _whisper_msg "[cancelled]"; return 1; }
+		local size=$(ma_get_size "$tmpsnd")
+		(( size > 8000 )) || { _whisper_msg "[no audio]"; return 1; }
+		sox -q -t raw -r 16000 -e signed-integer -b 16 -c 1 "$tmpsnd" "$_whisper_tmpdir/snd.wav" || return 1
+		out=$(_whisper_stt "$_whisper_tmpdir/snd.wav" ) || { return 1; }
+		out=${out//\[BLANK_AUDIO\]/}; out=${out//$'\r'/}; out=${out//$'\n'/ }
+		read -r out <<<"$out" || true	# trim
+		[[ -n $out ]] || { _whisper_msg "[nothing recognised]"; return 1; }
+		printf '%s' "$out"
+	}
+	_whisper_dictate() {
+		[[ -z "${MA_WHISPER_URL:-}" && -z "${MA_WHISPER_MODEL:-}" ]] && return 0;
+		command -v sox >/dev/null || { _whisper_msg "[sox not found]"; return 0; }
+		local text before=''
+		text=$(_whisper_session) || true
+		[[ -n $text ]] || return 0
+		text="${text%"${text##*[![:space:]]}"}"
+		text="${text#"${text%%[![:space:]]*}"}"
+		_whisper_msg ""
+		before=${READLINE_LINE:0:READLINE_POINT}
+		[[ -n $before && $before != *[[:space:]] ]] && text=" $text"
+		READLINE_LINE=$before$text${READLINE_LINE:READLINE_POINT}
+		READLINE_POINT=$(( READLINE_POINT + ${#text} ))
+		printf "$RL_REDRAW" >&2
+		[[ ${MA_WHISPER_AUTO_ACCEPT:-} == true ]] && {
+			_prompt_capture_accept
+			printf "$RL_ACCEPT" >&2
+		}
+	}
+
+}
+
 
 
 
