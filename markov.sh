@@ -1006,6 +1006,7 @@ Default configuration:
 
 ```bash
 MA_WHISPER_LANG=en      # transcription language
+MA_WHISPER_THREADS=4    # threads to use with whisper-cli
 MA_REC_MAX_SECONDS=30   # maximum recording time
 MA_REC_SILENCE_MS=1000  # auto-stop after silence (ms)
 MA_REC_DEVICE=default   # default waveaudio device (Windows)
@@ -12359,7 +12360,7 @@ _whisper_setup() {
 		[[ -n $MA_WHISPER_URL ]] && curl -sf --connect-timeout 0.5 -m 60 \
 			-F "file=@$wav" -F response_format=text -F temperature=0 -F "language=${MA_WHISPER_LANG:-en}" "$MA_WHISPER_URL/inference" 2>/dev/null && return 0
 		[[ -n "${MA_WHISPER_MODEL:-}" ]] || { _whisper_msg "[MA_WHISPER_MODEL not specified]"; return 1; }
-		"${MA_WHISPER_BIN:-"whisper-cli"}" -m "${MA_WHISPER_MODEL:-}" -f "$wav" -l "${MA_WHISPER_LANG:-en}" -t "${MA_REC_THREADS:-4}" -nt -np 2>/dev/null || {
+		"${MA_WHISPER_BIN:-"whisper-cli"}" -m "${MA_WHISPER_MODEL:-}" -f "$wav" -l "${MA_WHISPER_LANG:-en}" -t "${MA_WHISPER_THREADS:-4}" -nt -np 2>/dev/null || {
 			_whisper_msg "[whisper-cli failed]"; return 1;
 		}
 	}

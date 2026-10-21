@@ -831,6 +831,7 @@ Default configuration:
 
 ```bash
 MA_WHISPER_LANG=en      # transcription language
+MA_WHISPER_THREADS=4    # threads to use with whisper-cli
 MA_REC_MAX_SECONDS=30   # maximum recording time
 MA_REC_SILENCE_MS=1000  # auto-stop after silence (ms)
 MA_REC_DEVICE=default   # default waveaudio device (Windows)
