@@ -4110,6 +4110,7 @@ doc_load() { # 1:target_file
 		fi
 
 		meta_sync get
+		[[ -n $MA_SESSION_ID ]] || ma_gen_session_id MA_SESSION_ID
 		_doc_threads_update_on_reload
 
 		local f=('' 0 0 0 0)
