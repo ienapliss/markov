@@ -7279,7 +7279,7 @@ _endpoint_request_models() {
 		fi
     fi
 
-	local _h_auth=(); _api_set_call_header _h_auth "$MA_API_TYPE" "$MA_API_KEY" "$MA_PROVIDER"
+	local _h_auth=(); _api_set_call_header _h_auth "$MA_API_TYPE" "$MA_API_KEY" "${MA_PROVIDER:-}"
     raw="$(curl ${MA_API_PROXY:-} -m 11 -N --tcp-nodelay -sS "${models_url}" "${_h_auth[@]}" 2>/dev/null)"
 }
 
