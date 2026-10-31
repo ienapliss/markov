@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: MIT
 # ============================================================================
 
-MA_VERSION="0.3.0"
+MA_VERSION="0.3.1"
 
 set -o pipefail
 [[ -v MA_DEVELOP ]] && set -u
@@ -2030,6 +2030,13 @@ ma_uid() { # 1:out_var(ref) -> 6 chars time (epoch ms) + 2 chars pid, base36
 	s+=${chars:p%36:1}${chars:(p/36)%36:1}
 	_r=$s
 }
+ma_gen_session_id() {
+    if [[ -v SRANDOM ]]; then
+        printf -v $1 '%08x%08x' "$SRANDOM" "$SRANDOM"
+    else
+        printf -v $1 '%x%x%04x%04x' "${EPOCHSECONDS:-$(date +%s)}" "$$" "$RANDOM" "$RANDOM"
+    fi
+}
 
 _hook_call() {
 	local hook arrname="_hooks_$1"
@@ -3831,6 +3838,7 @@ meta_sync() { # 1:set/get
 
 	[[ $1 == get ]] && meta_load
 
+	meta_${1}		session_id			MA_SESSION_ID
 	meta_${1}		version				MA_DOC_VERSION
 	meta_${1}		working-dir			MA_PROJECT_DIR
 
@@ -4224,7 +4232,7 @@ _boot_init() {
 
 ma_bootup() {
 	_boot_init
-
+	ma_gen_session_id MA_SESSION_ID
 
 	if command -v setsid >/dev/null; then
 		_MA_SETSID=(setsid)
@@ -7271,7 +7279,7 @@ _endpoint_request_models() {
 		fi
     fi
 
-	local _h_auth=(); _api_set_call_header _h_auth "$MA_API_TYPE" "$MA_API_KEY"
+	local _h_auth=(); _api_set_call_header _h_auth "$MA_API_TYPE" "$MA_API_KEY" "$MA_PROVIDER"
     raw="$(curl ${MA_API_PROXY:-} -m 11 -N --tcp-nodelay -sS "${models_url}" "${_h_auth[@]}" 2>/dev/null)"
 }
 
@@ -7451,7 +7459,7 @@ _list_provider_models() {
 
 _api_set_call_header() {
 	local -n out_h_auth=$1
-	local api_type=${2:-openai_chat} api_key=${3:-}
+	local api_type=${2:-openai_chat} api_key=${3:-} provider=${4:-}
 	out_h_auth=()
 	[[ -n "$api_key" ]] && {
 		if [[ $api_type == "anthropic" ]]; then
@@ -7460,6 +7468,7 @@ _api_set_call_header() {
 			out_h_auth=("-H" "Authorization: Bearer $api_key")
 		fi
 	}
+	[[ $provider == *opencode* && -n ${MA_SESSION_ID:-} ]] && out_h_auth+=( -H "x-opencode-session: $MA_SESSION_ID" )
 }
 
 _api_call() { # non-streaming
@@ -7467,6 +7476,7 @@ _api_call() { # non-streaming
 	local -n api_response=$2
 
 	local api_type=${MA_ENDPOINT_OBJ["api_type"]}
+	local provider=${MA_ENDPOINT_OBJ["provider"]}
 	local api_key=${MA_ENDPOINT_OBJ["api_key"]}
 
 	local raw response http_code sep=$'\x1f' error_code=
@@ -7474,7 +7484,7 @@ _api_call() { # non-streaming
 	ma_spinner_start
 
 	_curl_cmd_blocking(){
-		local _h_auth=(); _api_set_call_header _h_auth "$api_type" "$api_key"
+		local _h_auth=(); _api_set_call_header _h_auth "$api_type" "$api_key" "$provider"
 		# shellcheck disable=SC2086
 		printf '%s' "$body" | curl ${MA_ENDPOINT_OBJ["api_proxy"]} "${MA_USER_AGENT_ARRAY[@]}" "${MA_CURL_EXTRA_ARGS[@]}" -H 'Accept: application/json' --keepalive-time 60 -sS -w "${sep}%{http_code}" \
 			  -X POST "${MA_ENDPOINT_OBJ["api_url"]}" -H 'Content-Type: application/json' "${_h_auth[@]}" --data-binary @- 2>/dev/null
@@ -7595,7 +7605,7 @@ _api_call_stream() {
 	local api_type=${MA_ENDPOINT_OBJ["api_type"]}
 	local api_key=${MA_ENDPOINT_OBJ["api_key"]}
 
-	local _h_auth=(); _api_set_call_header _h_auth "$api_type" "$api_key"
+	local _h_auth=(); _api_set_call_header _h_auth "$api_type" "$api_key" "$provider"
 
 	api_response=();
 
