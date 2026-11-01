@@ -2,6 +2,11 @@
 
 All notable changes to this project will be listed here.
 
+## [0.4.1] - 2026-11-01
+
+### Fixed
+- Oauth 2 for MCP: accept access tokens with non-RFC 6750 characters
+
 ## [0.4.0] - 2026-11-01
 
 ### Added

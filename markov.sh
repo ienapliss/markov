@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: MIT
 # ============================================================================
 
-MA_VERSION="0.4.0"
+MA_VERSION="0.4.1"
 
 set -o pipefail
 [[ -v MA_DEVELOP ]] && set -u
