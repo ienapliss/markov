@@ -12413,7 +12413,7 @@ _mcp_oauth_auth() { # $1:token $2:file
 
 _mcp_oauth_store() { # $1:server $2:token response JSON; merge into state + write .auth
 	local sf=${MA_MCP_OAUTH[$1]} at='' tmp=''
-	at=$(jq -rb '.access_token // empty | select(type == "string" and test("^[A-Za-z0-9._~+/-]+=*$"))' <<< "$2" 2>/dev/null)
+	at=$(jq -rb '.access_token // empty | select(type == "string" and length > 0 and (test("[[:cntrl:][:space:]\"\\\\]") | not))' <<< "$2" 2>/dev/null)
 	[[ -n $at ]] || return 1
 	tmp=$(jq -bcs '.[0] + {access_token: .[1].access_token}
 	              + (.[1] | if .refresh_token then {refresh_token} else {} end)' "$sf" - <<< "$2") || return 1
