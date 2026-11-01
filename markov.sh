@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: MIT
 # ============================================================================
 
-MA_VERSION="0.3.1"
+MA_VERSION="0.4.0"
 
 set -o pipefail
 [[ -v MA_DEVELOP ]] && set -u
@@ -272,8 +272,7 @@ not work as intended.
 * Built-in tools enabled by default: `read`, `write`, `edit`, `bash`, 
   `skills`, `execute`, `websearch`, `delegate`
 * Additional tools: `symbols`, `reload`, `docs`, `ask`, `grep`, `find`, `ls`
-* Basic **MCP support**: over *Streamable HTTP* and *local stdio*,
-  OAuth-only servers not supported
+* Basic **MCP support**: over *Streamable HTTP* and *local stdio*
 * **Speech-to-Text**: via `whisper` and `sox`
 * **Built-in tool call analyzer**: use a trusted LLM to analyze tool calls
 * **Inter-process communication** for sending and queueing messages from
@@ -941,7 +940,6 @@ system prompt to better adapt it to your sub-tasks.
 #### MCP
 
 Supports MCP over **Streamable HTTP** and **local stdio**.
-OAuth-only servers are not supported.
 Server requests are ignored: client advertises no capabilities.
 
 Configure each server in a global associative array named `mcp_*`.
@@ -956,6 +954,11 @@ declare -gA mcp_github=(
   [api_key]="$GITHUB_TOKEN"
 )
 
+declare -gA mcp_linear=(
+  [api_url]='https://mcp.linear.app/mcp'
+  [oauth]=true
+)
+
 declare -gA mcp_files=(
   [command]='npx -y @modelcontextprotocol/server-filesystem /home/me/project'
   [env]='FOO=bar TOKEN=abc'
@@ -966,11 +969,25 @@ HTTP server fields:
 
 * `api_url`: MCP server URL
 * `api_key`: (Optional) authentication key or token
-* `auth_header`: (Optional) header format; `%s` is replaced with
-  `api_key`. Defaults to `Authorization: Bearer %s`
 * `extra_args`: (Optional) more arguments passed to curl
+* `auth_header`: (Optional) header format; `%s` is replaced with `api_key`.
+  Defaults to `Authorization: Bearer %s`
+* `oauth`: (Optional) true enables OAuth (replaces `api_key`, don't set both)
+* `oauth_client_id`: (Optional) pre-registered (public, no secret) client id
+  (redirect URI must be `http://localhost:8765/callback`). Otherwise dynamic
+  registration is used
+* `oauth_scope`: (Optional) scopes; defaults to the server's `scopes_supported`
 
-Some server may use `[auth_header]='x-api-key: %s'` for authentication.
+> [!NOTE]
+> OAuth 2.1 (PKCE, dynamic client registration) is supported for HTTP servers
+> with `[oauth]=true`. Login needs an interactive terminal. On first start
+> a browser opens; after approving, paste the final redirect URL
+> (the page will fail to load) back into the terminal.
+> Tokens are stored in `MA_MCP_AUTH_DIR` (default `~/.local/state/ma-mcp`).
+> Tokens are refreshed automatically. To log out or force a new login,
+> delete `<server>.json` in that directory. The files contain secrets.
+
+Some servers may use may use `[auth_header]='x-api-key: %s'`.
 
 Local (stdio) server fields:
 * `command`: Command used to launch the server
@@ -4234,6 +4251,7 @@ _boot_init() {
 ma_bootup() {
 	_boot_init
 	ma_gen_session_id MA_SESSION_ID
+	MA_OAUTH_CLIENT=markov
 
 	if command -v setsid >/dev/null; then
 		_MA_SETSID=(setsid)
@@ -12085,26 +12103,31 @@ _mcp_stdio_stop() { # $1:server
 _mcp_post() { # $1:server  $2:json_body  $3:request_id ('' for notifications)
 	[[ -n ${MA_MCP_WFD[${1:-}]:-} ]] && { _mcp_stdio_post "$@"; return; }
 
-	local srv=$1 raw='' hdr='' rc=0 sid='' sidf=${MA_MCP_CFG[$1]%.cfg}.sid
+	local srv=$1 raw='' hdr='' rc=0 sid='' sidf=${MA_MCP_CFG[$1]%.cfg}.sid try=0
 	local -a h=()
 
-	# sub-sehll may restart session
 	[[ -r $sidf ]] && { IFS= read -r sid < "$sidf"; MA_MCP_SESSION[$srv]=$sid; }
 
 	[[ -n ${MA_MCP_VER[$srv]:-} ]]     && h+=( -H "MCP-Protocol-Version: ${MA_MCP_VER[$srv]}" )
 	[[ -n ${MA_MCP_SESSION[$srv]:-} ]] && h+=( -H "Mcp-Session-Id: ${MA_MCP_SESSION[$srv]}" )
+	[[ -n ${MA_MCP_OAUTH[$srv]:-} ]]   && h+=( -K "${MA_MCP_CFG[$srv]%.cfg}.auth" )
 	_MCP_CODE=0; _MCP_BODY=''; _MCP_SSE=false; _MCP_ERR=''
 
-	raw=$( curl -K "${MA_MCP_CFG[$srv]}" "${h[@]}" ${MA_MCP_CURL_EXTRA_ARGS[$srv]:-} --data-binary @- <<< "$2" )
-	rc=$?
-	(( rc )) && { _MCP_ERR="curl failed (exit $rc) talking to MCP server '$srv'"; return 1; }
+	for try in 1 2; do
+		raw=$( curl -K "${MA_MCP_CFG[$srv]}" "${h[@]}" ${MA_MCP_CURL_EXTRA_ARGS[$srv]:-} --data-binary @- <<< "$2" )
+		rc=$?
+		(( rc )) && { _MCP_ERR="curl failed (exit $rc) talking to MCP server '$srv'"; return 1; }
 
-	raw+=$'\r\n\r\n'
-	while [[ $raw == HTTP/* ]]; do  # skip any 1xx blocks (100-continue)
-		hdr=${raw%%$'\r\n\r\n'*}
-		raw=${raw#*$'\r\n\r\n'}
-		[[ $hdr =~ $_MCP_RE_STATUS ]] && _MCP_CODE=${BASH_REMATCH[1]}
-		(( _MCP_CODE >= 200 )) && break
+		raw+=$'\r\n\r\n'
+		while [[ $raw == HTTP/* ]]; do  # skip any 1xx blocks (100-continue)
+			hdr=${raw%%$'\r\n\r\n'*}
+			raw=${raw#*$'\r\n\r\n'}
+			[[ $hdr =~ $_MCP_RE_STATUS ]] && _MCP_CODE=${BASH_REMATCH[1]}
+			(( _MCP_CODE >= 200 )) && break
+		done
+		(( try == 1 && _MCP_CODE == 401 )) && [[ -n ${MA_MCP_OAUTH[$srv]:-} ]] \
+			&& _mcp_oauth_refresh "$srv" && continue
+		break
 	done
 
 	shopt -s nocasematch
@@ -12143,7 +12166,7 @@ _mcp_server_init() { # $1:server
 	[[ -n ${MA_MCP_CFG[$srv]:-} ]] && { sidf=${MA_MCP_CFG[$srv]%.cfg}.sid; : > "$sidf"; }
 	MA_MCP_SESSION[$srv]=''; MA_MCP_VER[$srv]=''
 	_mcp_request "$srv" \
-		'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"'"$MA_MCP_DEFAULT_VER"'","capabilities":{},"clientInfo":{"name":"ma-harness","version":"0.1"}}}' \
+		'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"'"$MA_MCP_DEFAULT_VER"'","capabilities":{},"clientInfo":{"name":"'"$MA_OAUTH_CLIENT"'","version":"'"$MA_VERSION"'"}}}' \
 		1 out "$_MCP_Q_INIT"
 	[[ $out == O* ]] || { out=${out#?$'\x1f'}; warn "MCP '$srv': ${out:-init failed}\n"; return 1; }
 	MA_MCP_VER[$srv]=${out#?$'\x1f'}
@@ -12223,7 +12246,8 @@ _mcp_call() { # 1:fn_name  2:fn_args
 _mcp_boot() {
 	[[ -n ${_MCP_BOOTED:-} ]] && return 0
 	declare -g _MCP_BOOTED=1
-	declare -gA MA_MCP_CFG=() MA_MCP_SESSION=() MA_MCP_VER=() MA_MCP_TOOLMAP=() MA_MCP_CURL_EXTRA_ARGS=()
+	declare -gA MA_MCP_CFG=() MA_MCP_SESSION=() MA_MCP_VER=() MA_MCP_TOOLMAP=() MA_MCP_CURL_EXTRA_ARGS=() MA_MCP_OAUTH=()
+	declare -g  _MCP_OA=''
 	declare -gA MA_MCP_RFD=() MA_MCP_WFD=() MA_MCP_PID=() MA_MCP_LOG=()      # stdio servers
 	declare -g  _MCP_BODY='' _MCP_CODE=0 _MCP_SSE=false _MCP_ERR=''
 	declare -g  MA_MCP_DEFAULT_VER=${MA_MCP_DEFAULT_VER:-2025-06-18}
@@ -12298,6 +12322,7 @@ mcp_load() {
 	local call_to=${MA_MCP_TIMEOUT:-120}
 	local -n cfg=MA_MCP_CFG
 	declare -gA MA_MCP_SERVERS=()
+	local -a oa=()
 	for var in "${!mcp_@}"; do
 		ma_spinner_stop
 		[[ ${!var@a} == *A* ]] || continue            # associative arrays only
@@ -12327,8 +12352,17 @@ mcp_load() {
 			f="$_ma_tmp_dir/ma-mcp-$BASHPID-${srv//[^A-Za-z0-9_]/_}.cfg"
 			( umask 077; printf '%s' "$text" > "$f"; : > "${f%.cfg}.sid" ) || { warn "MCP '$srv': cannot write $f\n"; continue; }
 			MA_MCP_CFG[$srv]=$f
+			if [[ ${cfg[oauth]:-} == true ]]; then
+				MA_MCP_OAUTH[$srv]=${MA_MCP_AUTH_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ma-mcp}/${srv//[^A-Za-z0-9_]/_}.json
+				oa=( "$srv" "${cfg[api_url]}" "${cfg[oauth_client_id]:-}" "${cfg[oauth_scope]:-}" )
+				_mcp_oauth_start "${oa[@]}" || continue
+			fi
 		fi
-		_mcp_server_start "$srv" "$lazy"
+		_mcp_server_start "$srv" "$lazy" || {
+			[[ -n ${MA_MCP_OAUTH[$srv]:-} && $_MCP_CODE == 401 ]] || continue
+			_mcp_oauth_login "${oa[@]}" && _mcp_server_start "$srv" "$lazy"
+		}
+
 	done
 	ma_spinner_stop
 	unset -n cfg
@@ -12337,12 +12371,162 @@ mcp_load() {
 
 mcp_cleanup() {
 	[[ -n ${_MCP_BOOTED:-} ]] || return 0
-	local srv='' log=''
+	local srv=''
 	for srv in "${!MA_MCP_PID[@]}"; do _mcp_stdio_stop "$srv"; done
-	if (( ${#MA_MCP_CFG[@]} )); then rm -f "${MA_MCP_CFG[@]}" "${MA_MCP_CFG[@]/%.cfg/.sid}"; fi
+	if (( ${#MA_MCP_CFG[@]} )); then
+		rm -f "${MA_MCP_CFG[@]}" "${MA_MCP_CFG[@]/%.cfg/.sid}" "${MA_MCP_CFG[@]/%.cfg/.auth}"
+	fi
 	if (( ${#MA_MCP_LOG[@]} )); then rm -f "${MA_MCP_LOG[@]}"; fi
 	return 0
 }
+
+
+_mcp_oauth_ok() { # $1:url  https, or http on loopback; no whitespace/control chars
+	local re='^(https://|http://(localhost|127\.0\.0\.1|\[::1\])[:/])[^[:space:][:cntrl:]]+$'
+	[[ $1 =~ $re ]]
+}
+
+_mcp_oauth_get() { _mcp_oauth_ok "$1" && _MCP_OA=$(curl -fsS --max-time 30 --max-filesize 1048576 "$1" 2>/dev/null); }
+
+_mcp_oauth_wk() { # $1:url $2..:well-known names. Path-inserted first, then fallbacks -> _MCP_OA
+	local u=${1%/} r=${1#*://} o='' p='' n=''; shift
+	local -a c=()
+	o=${u%%://*}://${r%%/*}; p=${r#"${r%%/*}"}; p=${p%/}
+	for n; do c+=( "$o/.well-known/$n$p" ); done
+	if [[ -n $p ]]; then for n; do c+=( "$u/.well-known/$n" "$o/.well-known/$n" ); done; fi
+	for n in "${c[@]}"; do _mcp_oauth_get "$n" && return 0; done
+	return 1
+}
+
+_mcp_oauth_post() { # $1:url $2..:name=value (form-urlencoded; kept out of argv) -> _MCP_OA
+	_mcp_oauth_ok "$1" || return 1
+	local kv='' e='' c=$'silent\nshow-error\nmax-time = 30\n'
+	_mcp_jescape "$1" e; c+="url = \"$e\""$'\n'; shift
+	for kv; do _mcp_jescape "$kv" e; c+="data-urlencode = \"$e\""$'\n'; done
+	_MCP_OA=$(curl -K - <<< "$c")
+}
+
+_mcp_oauth_auth() { # $1:token $2:file
+	local e=''; _mcp_jescape "Authorization: Bearer $1" e
+	( umask 077; printf 'header = "%s"\n' "$e" > "$2" )
+}
+
+_mcp_oauth_store() { # $1:server $2:token response JSON; merge into state + write .auth
+	local sf=${MA_MCP_OAUTH[$1]} at='' tmp=''
+	at=$(jq -rb '.access_token // empty | select(type == "string" and test("^[A-Za-z0-9._~+/-]+=*$"))' <<< "$2" 2>/dev/null)
+	[[ -n $at ]] || return 1
+	tmp=$(jq -bcs '.[0] + {access_token: .[1].access_token}
+	              + (.[1] | if .refresh_token then {refresh_token} else {} end)' "$sf" - <<< "$2") || return 1
+	( umask 077; printf '%s\n' "$tmp" > "$sf" ) || return 1
+	_mcp_oauth_auth "$at" "${MA_MCP_CFG[$1]%.cfg}.auth"
+}
+
+_mcp_oauth_refresh() { # $1:server
+	local sf=${MA_MCP_OAUTH[$1]} ep='' rt='' cid='' sec='' res=''
+	IFS=$'\x1f' read -r ep rt cid sec res < <(jq -br \
+		'[.token_endpoint,.refresh_token,.client_id,.client_secret,.resource]|map(.//"")|join("\u001f")' "$sf" 2>/dev/null)
+	[[ -n $ep && -n $rt ]] || return 1
+	_mcp_oauth_post "$ep" grant_type=refresh_token refresh_token="$rt" client_id="$cid" resource="$res" \
+		${sec:+"client_secret=$sec"} && _mcp_oauth_store "$1" "$_MCP_OA"
+}
+
+_mcp_oauth_start() { # $1:server $2:mcp url $3:client_id $4:scope
+	local at=''
+	if [[ -r ${MA_MCP_OAUTH[$1]} ]] && at=$(jq -ber --arg r "$2" 'select(.resource == $r) | .access_token' "${MA_MCP_OAUTH[$1]}" 2>/dev/null); then
+		_mcp_oauth_auth "$at" "${MA_MCP_CFG[$1]%.cfg}.auth"
+	else
+		_mcp_oauth_login "$@"
+	fi
+}
+
+_mcp_oauth_login() { # $1:server $2:mcp url $3:client_id $4:scope
+	local srv=$1 url=$2 cid=${3:-} scope=${4:-} sf=${MA_MCP_OAUTH[$1]}
+	local redir='http://localhost:8765/callback' raw='' prm='' as='' sec='' ea='' et='' er=''
+	local ver='' chal='' st='' u='' reply='' code='' rst='' re=''
+
+	_mcp_oauth_ok "$url" || { warn "MCP '$srv': OAuth needs an https URL (http only on loopback)\n"; return 1; }
+	( umask 077; mkdir -p "${sf%/*}" ) || return 1
+
+	# RFC 9728: resource_metadata from the 401 challenge, else well-known probing
+	raw=$(curl -s --max-time 30 -o /dev/null -D - -X POST -H 'Content-Type: application/json' \
+	-H 'Accept: application/json, text/event-stream' -d '{}' "$url")
+
+	re=$'\nwww-authenticate:[^\r\n]*resource_metadata="([^"]+)"'
+	shopt -s nocasematch; [[ $raw =~ $re ]] && prm=${BASH_REMATCH[1]}; shopt -u nocasematch
+	{ [[ -n $prm ]] && _mcp_oauth_get "$prm" || _mcp_oauth_wk "$url" oauth-protected-resource; } \
+		|| { warn "MCP '$srv': no OAuth protected-resource metadata\n"; return 1; }
+
+	jq -e --arg u "${url%/}" '(.resource // "" | tostring | rtrimstr("/")) == $u' <<< "$_MCP_OA" &>/dev/null \
+		|| { warn "MCP '$srv': resource metadata does not match the server URL\n"; return 1; }
+
+	as=$(jq -br '.authorization_servers[0] // empty' <<< "$_MCP_OA")
+	[[ -n $scope ]] || scope=$(jq -br '(.scopes_supported // []) | join(" ")' <<< "$_MCP_OA")
+
+	# RFC 8414 / OIDC discovery
+	_mcp_oauth_wk "${as:-$url}" oauth-authorization-server openid-configuration \
+		|| { warn "MCP '$srv': no authorization server metadata\n"; return 1; }
+
+	[[ -z $as ]] || jq -e --arg a "${as%/}" '(.issuer // "" | tostring | rtrimstr("/")) == $a' <<< "$_MCP_OA" &>/dev/null \
+		|| { warn "MCP '$srv': issuer mismatch\n"; return 1; }
+
+	IFS=$'\x1f' read -r ea et er < <(jq -br \
+		'[.authorization_endpoint,.token_endpoint,.registration_endpoint]|map(.//"")|join("\u001f")' <<< "$_MCP_OA")
+	[[ -n $ea && -n $et ]] && _mcp_oauth_ok "$ea" && _mcp_oauth_ok "$et" && { [[ -z $er ]] || _mcp_oauth_ok "$er"; } \
+		|| { warn "MCP '$srv': incomplete or unsafe authorization server metadata\n"; return 1; }
+
+	if [[ -z $cid && -r $sf ]]; then
+		IFS=$'\x1f' read -r cid sec < <(jq -br --arg r "$url" \
+			'select(.resource == $r) | [.client_id,.client_secret] | map(.//"") | join("\u001f")' "$sf" 2>/dev/null)
+	fi
+
+	# RFC 7591 dynamic client registration (public client)
+	if [[ -z $cid ]]; then
+		[[ -n $er ]] || { warn "MCP '$srv': no registration endpoint; set oauth_client_id\n"; return 1; }
+		_MCP_OA=$(curl -fsS --max-time 30 -H 'Content-Type: application/json' "$er" \
+			-d '{"client_name":"'"$MA_OAUTH_CLIENT"'","redirect_uris":["'$redir'"],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none"}') \
+			|| { warn "MCP '$srv': client registration failed\n"; return 1; }
+		IFS=$'\x1f' read -r cid sec < <(jq -br '[.client_id,.client_secret]|map(.//"")|join("\u001f")' <<< "$_MCP_OA")
+		[[ -n $cid ]] || { warn "MCP '$srv': registration returned no client_id\n"; return 1; }
+	fi
+
+	# PKCE + authorization URL (RFC 7636, RFC 8707 resource)
+	ver=$(head -c 48 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')
+	chal=$(printf %s "$ver" | openssl dgst -sha256 -binary | base64 | tr '+/' '-_' | tr -d '=\n')
+	st=$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')
+	u=$ea; [[ $u == *\?* ]] && u+='&' || u+='?'
+	u+=$(jq -brn '$ARGS.named | to_entries | map("\(.key)=\(.value|@uri)") | join("&")' \
+		--arg response_type code --arg client_id "$cid" --arg redirect_uri "$redir" \
+		--arg code_challenge "$chal" --arg code_challenge_method S256 --arg state "$st" \
+		--arg resource "$url" ${scope:+--arg scope "$scope"})
+
+	printf "${A_WARN}Authorize MCP \"%s\" with your browser (should open automatically, copy manually otherwise):${A_RESP}\n%s\n" "$srv" "$u" >&2
+	case ${OSTYPE:-} in
+		msys*|cygwin*) rundll32 url.dll,FileProtocolHandler "$u" ;;
+		darwin*)       open "$u" ;;
+		*)             xdg-open "$u" ;;
+	esac &>/dev/null &
+	printf ${A_WARN}"Page won't load, PASTE the final URL here (It should contain 'code' and 'state'):${A_R}\n" >&2
+	ma_tty_echo_on
+	read -r reply </dev/tty || { warn "MCP '$srv': no terminal to read the URL from\n"; return 1; }
+	reply=${reply//$'\r'/}
+	re='[?&]code=([^&# ]+)';  [[ $reply =~ $re ]] && code=${BASH_REMATCH[1]}
+	re='[?&]state=([^&# ]+)'; [[ $reply =~ $re ]] && rst=${BASH_REMATCH[1]}
+	[[ -n $code && $rst == "$st" ]] || { warn "MCP '$srv': no valid code/state in pasted URL\n"; return 1; }
+	code=$(printf '%b' "${code//%/\\x}")
+
+	( umask 077; jq -bnc --arg c "$cid" --arg s "$sec" --arg t "$et" --arg r "$url" \
+		'{client_id:$c, client_secret:$s, token_endpoint:$t, resource:$r}' > "$sf" ) || return 1
+	_mcp_oauth_post "$et" grant_type=authorization_code code="$code" redirect_uri="$redir" client_id="$cid" \
+		code_verifier="$ver" resource="$url" ${sec:+"client_secret=$sec"} \
+		&& _mcp_oauth_store "$srv" "$_MCP_OA" \
+		|| { rm -f "$sf"; warn "MCP '$srv': token exchange failed\n"; return 1; }
+}
+
+
+
+
+
+
 
 
 

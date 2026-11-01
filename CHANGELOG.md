@@ -2,6 +2,15 @@
 
 All notable changes to this project will be listed here.
 
+## [0.4.0] - 2026-11-01
+
+### Added
+- **OAuth 2 for MCP**: Added support for OAuth 2 authentication in the Model Context Protocol (MCP).
+
+### Fixed
+- **Opencode Providers**: Ensured the `x-opencode-session` header is sent correctly for opencode providers.
+- **STT Shortcuts**: Updated recording shortcut to `Ctrl+Alt+R`.
+
 ## [0.3.0] - 2026-10-25
 
 ### Added

@@ -106,8 +106,7 @@ not work as intended.
 * Built-in tools enabled by default: `read`, `write`, `edit`, `bash`, 
   `skills`, `execute`, `websearch`, `delegate`
 * Additional tools: `symbols`, `reload`, `docs`, `ask`, `grep`, `find`, `ls`
-* Basic **MCP support**: over *Streamable HTTP* and *local stdio*,
-  OAuth-only servers not supported
+* Basic **MCP support**: over *Streamable HTTP* and *local stdio*
 * **Speech-to-Text**: via `whisper` and `sox`
 * **Built-in tool call analyzer**: use a trusted LLM to analyze tool calls
 * **Inter-process communication** for sending and queueing messages from
@@ -766,7 +765,6 @@ system prompt to better adapt it to your sub-tasks.
 #### MCP
 
 Supports MCP over **Streamable HTTP** and **local stdio**.
-OAuth-only servers are not supported.
 Server requests are ignored: client advertises no capabilities.
 
 Configure each server in a global associative array named `mcp_*`.
@@ -781,6 +779,11 @@ declare -gA mcp_github=(
   [api_key]="$GITHUB_TOKEN"
 )
 
+declare -gA mcp_linear=(
+  [api_url]='https://mcp.linear.app/mcp'
+  [oauth]=true
+)
+
 declare -gA mcp_files=(
   [command]='npx -y @modelcontextprotocol/server-filesystem /home/me/project'
   [env]='FOO=bar TOKEN=abc'
@@ -791,11 +794,25 @@ HTTP server fields:
 
 * `api_url`: MCP server URL
 * `api_key`: (Optional) authentication key or token
-* `auth_header`: (Optional) header format; `%s` is replaced with
-  `api_key`. Defaults to `Authorization: Bearer %s`
 * `extra_args`: (Optional) more arguments passed to curl
+* `auth_header`: (Optional) header format; `%s` is replaced with `api_key`.
+  Defaults to `Authorization: Bearer %s`
+* `oauth`: (Optional) true enables OAuth (replaces `api_key`, don't set both)
+* `oauth_client_id`: (Optional) pre-registered (public, no secret) client id
+  (redirect URI must be `http://localhost:8765/callback`). Otherwise dynamic
+  registration is used
+* `oauth_scope`: (Optional) scopes; defaults to the server's `scopes_supported`
 
-Some server may use `[auth_header]='x-api-key: %s'` for authentication.
+> [!NOTE]
+> OAuth 2.1 (PKCE, dynamic client registration) is supported for HTTP servers
+> with `[oauth]=true`. Login needs an interactive terminal. On first start
+> a browser opens; after approving, paste the final redirect URL
+> (the page will fail to load) back into the terminal.
+> Tokens are stored in `MA_MCP_AUTH_DIR` (default `~/.local/state/ma-mcp`).
+> Tokens are refreshed automatically. To log out or force a new login,
+> delete `<server>.json` in that directory. The files contain secrets.
+
+Some servers may use may use `[auth_header]='x-api-key: %s'`.
 
 Local (stdio) server fields:
 * `command`: Command used to launch the server
