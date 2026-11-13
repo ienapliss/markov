@@ -12722,6 +12722,7 @@ ma_tty_echo_off
 	[[ -r "$MA_USER_PROMPT" ]] && MA_USER_PROMPT="$(<"$MA_USER_PROMPT")";
 	ma_bootup;
 	[[ -n "${_MA_INPUT_FILE_CLI:-}" ]] && thread_add_msg_with_file MA_THREAD_JSON "" "${_MA_INPUT_FILE_CLI}"
+	ma_term_update
 	ma_agent_run
 	ret=$?
 	[[ -t 2 ]] && printf "\n" >&2
